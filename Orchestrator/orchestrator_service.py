@@ -73,6 +73,16 @@ NLU_SERVICE_TOKEN = os.environ.get("NLU_SERVICE_TOKEN", "")
 TTS_SERVICE_URL = os.environ.get("TTS_SERVICE_URL", "ws://localhost:8003/ws/synthesize")
 TTS_SERVICE_TOKEN = os.environ.get("TTS_SERVICE_TOKEN", "")
 
+# How long to wait, after an interruption, before assuming the caller wasn't
+# actually about to say something and resuming the interrupted reply instead.
+RESUME_TIMEOUT_SECONDS = float(os.environ.get("RESUME_TIMEOUT_SECONDS", "1.5"))
+
+# Whether STT's speech_started should also trigger barge-in. Off by default:
+# the client's local VAD detects speech faster (no network round trip) and,
+# in testing, far more reliably - STT fired dozens of spurious speech_started
+# events per call. Turn on only if local VAD is missing genuine speech.
+STT_BARGE_IN_ENABLED = os.environ.get("STT_BARGE_IN", "false").lower() == "true"
+
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN")
 if not ORCHESTRATOR_TOKEN:
     logger.warning(
@@ -271,22 +281,26 @@ async def handle_call(
                     logger.info("[%s] greeting interrupted by caller", conn_id)
                     raise
 
-            async def respond_to(transcript: str):
+            async def speak_reply_text(full_text_source):
                 """
-                The full 'answer this' pipeline: NLU streaming -> sentence
-                chunking -> TTS -> audio to caller. Runs as its own task so
-                the STT event loop stays free to detect barge-in while this
-                is in progress.
-                """
-                session.conversation_history.append({"role": "user", "content": transcript})
-                await session.transition(CallState.THINKING)
-                logger.info("[%s] caller said: %s", conn_id, transcript)
+                Shared core: sentence-chunks whatever text comes out of
+                full_text_source (either live NLU deltas or a fixed cached
+                string) and speaks each complete sentence as it's ready.
+                Returns the full text actually spoken. Used by both a fresh
+                response and a resumed one, so they share identical
+                chunking/speaking/cancellation behavior.
 
-                await session.transition(CallState.RESPONDING)
+                Important: this is where full_reply is actually accumulated,
+                so this is also where it must be saved if cancelled - a
+                caller that only captures the RETURN VALUE of this function
+                (e.g. `full_reply = await speak_reply_text(...)`) would
+                never see any partial progress on cancellation, since a
+                cancelled call never reaches its return statement at all.
+                """
                 full_reply = ""
                 chunker = SentenceChunker()
                 try:
-                    async for delta in stream_nlu_reply(session.conversation_history):
+                    async for delta in full_text_source:
                         full_reply += delta
                         await client_ws.send_text(json.dumps({
                             "event": "bot_speech_chunk",
@@ -299,35 +313,85 @@ async def handle_call(
                     if remainder:
                         await speak_text(tts_box["ws"], client_ws, remainder, audio_format)
 
-                    await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
-                    session.conversation_history.append({"role": "assistant", "content": full_reply})
-                    await session.transition(CallState.LISTENING)
+                    return full_reply
                 except asyncio.CancelledError:
-                    # Caller talked over the bot. Don't record the partial
-                    # reply - it was never actually delivered, so it has no
-                    # place in the conversation history. The barge-in
-                    # handler below owns notifying the client and moving
-                    # the state machine back to LISTENING.
+                    if full_reply.strip():
+                        session.pending_resume_text = full_reply
+                    raise
+
+            async def respond_to(transcript: str):
+                """
+                The full 'answer this' pipeline: NLU streaming -> sentence
+                chunking -> TTS -> audio to caller. Runs as its own task so
+                the STT event loop stays free to detect barge-in while this
+                is in progress.
+                """
+                session.conversation_history.append({"role": "user", "content": transcript})
+                await session.transition(CallState.THINKING)
+                logger.info("[%s] caller said: %s", conn_id, transcript)
+
+                await session.transition(CallState.RESPONDING)
+                try:
+                    full_reply = await speak_reply_text(stream_nlu_reply(session.conversation_history))
+                except asyncio.CancelledError:
+                    # Caller talked over the bot. speak_reply_text has
+                    # already stashed whatever partial text existed into
+                    # session.pending_resume_text if there was any - see
+                    # maybe_resume_after_timeout for what happens with it.
                     logger.info("[%s] response interrupted by caller", conn_id)
                     raise
 
-            async def cancel_current_response():
-                """Cancels the in-progress response, if any, and cleans up after it."""
+                await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
+                session.conversation_history.append({"role": "assistant", "content": full_reply})
+                await session.transition(CallState.LISTENING)
+
+            async def resume_response(text: str):
+                """
+                Re-speaks previously-generated text that got cut off by an
+                interruption, when the caller doesn't follow up with
+                anything new. Skips the NLU call entirely - the text is
+                already known, this is a replay, not a new turn.
+
+                Worth knowing: this replays only the portion that had
+                already been generated before the interruption, not a
+                continuation of what the LLM would have said next - that
+                part was never generated, since interrupting also cancels
+                the NLU stream itself.
+                """
+                logger.info("[%s] no follow-up from caller - resuming interrupted reply", conn_id)
+                await session.transition(CallState.RESPONDING)
+
+                async def single_chunk_source():
+                    yield text
+
+                try:
+                    full_reply = await speak_reply_text(single_chunk_source())
+                except asyncio.CancelledError:
+                    logger.info("[%s] resumed response interrupted again", conn_id)
+                    raise
+
+                await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
+                session.conversation_history.append({"role": "assistant", "content": full_reply})
+                await session.transition(CallState.LISTENING)
+
+            async def cancel_current_response() -> bool:
+                """
+                Cancels the in-progress response, if any, and cleans up
+                after it. Returns True if something was actually cancelled
+                (as opposed to there being nothing active to begin with) -
+                callers use this to decide whether a resume attempt makes
+                sense afterward.
+                """
                 nonlocal current_response_task
+                cancelled_something = False
                 if current_response_task is not None and not current_response_task.done():
+                    cancelled_something = True
                     logger.info("[%s] cancelling in-progress response task", conn_id)
                     current_response_task.cancel()
                     try:
                         await current_response_task
                     except asyncio.CancelledError:
                         pass
-                    # Tell the client to stop audio playback FIRST, before
-                    # anything else. Reconnecting TTS is purely internal
-                    # bookkeeping for the NEXT response's audio integrity -
-                    # it has nothing to do with stopping what's playing
-                    # right now, and the caller shouldn't have to wait for
-                    # it before the interruption actually takes effect.
-                    await client_ws.send_text(json.dumps({"event": "bot_interrupted"}))
                     await session.transition(CallState.LISTENING)
                     await reconnect_tts()
                 else:
@@ -338,34 +402,127 @@ async def handle_call(
                         current_response_task.done() if current_response_task is not None else None,
                     )
                 current_response_task = None
+                return cancelled_something
+
+            resume_timer_task: asyncio.Task | None = None
+
+            async def cancel_resume_timer():
+                """Cancels a pending resume attempt - called whenever the caller does ANYTHING new."""
+                nonlocal resume_timer_task
+                if resume_timer_task is not None and not resume_timer_task.done():
+                    resume_timer_task.cancel()
+                    try:
+                        await resume_timer_task
+                    except asyncio.CancelledError:
+                        pass
+                resume_timer_task = None
+
+            async def maybe_resume_after_timeout():
+                """
+                Waits a short grace period after an interruption. If the
+                caller hasn't said anything new by then, assumes they
+                didn't actually mean to interrupt (false trigger, cleared
+                throat, brief noise) and resumes the cut-off reply instead
+                of just leaving it dropped.
+                """
+                nonlocal current_response_task
+                await asyncio.sleep(RESUME_TIMEOUT_SECONDS)
+                if session.pending_resume_text:
+                    text_to_resume = session.pending_resume_text
+                    session.pending_resume_text = None
+                    current_response_task = asyncio.create_task(resume_response(text_to_resume))
+
+            async def handle_barge_in(source: str):
+                """
+                Shared barge-in path, triggered by the client's local VAD
+                (fast - detects speech in ~100ms without a network round
+                trip) or optionally by the STT service's speech_started.
+
+                Gated on the bot actually speaking: in practice both
+                detectors fire constantly during normal conversation
+                (every time the caller talks at all, including when
+                answering a question the bot just asked). Acting on those
+                is pointless work and floods the logs - there's nothing to
+                interrupt when the bot isn't talking.
+                """
+                nonlocal resume_timer_task
+                if session.state not in (CallState.RESPONDING, CallState.GREETING):
+                    return
+
+                logger.info("[%s] barge-in detected (source=%s)", conn_id, source)
+                await client_ws.send_text(json.dumps({"event": "bot_interrupted"}))
+                await cancel_resume_timer()
+                cancelled = await cancel_current_response()
+                if cancelled:
+                    resume_timer_task = asyncio.create_task(maybe_resume_after_timeout())
 
             async def pump_audio_caller_to_stt():
-                """Forwards the caller's audio to the STT Service."""
+                """
+                Forwards the caller's audio to the STT Service, and handles
+                control messages the client sends alongside it (currently
+                just its local-VAD barge-in signal).
+                """
                 try:
                     while True:
-                        chunk = await client_ws.receive_bytes()
-                        await stt_ws.send(chunk)
+                        message = await client_ws.receive()
+
+                        if message.get("type") == "websocket.disconnect":
+                            raise WebSocketDisconnect(message.get("code", 1000))
+
+                        if "bytes" in message and message["bytes"] is not None:
+                            try:
+                                await stt_ws.send(message["bytes"])
+                            except ConnectionClosed:
+                                # STT service dropped the connection. Losing
+                                # transcription is bad, but it shouldn't take
+                                # the whole call down - the caller can still
+                                # hear the bot, and local VAD still works.
+                                logger.error(
+                                    "[%s] STT connection lost - transcription stopped, call continues",
+                                    conn_id,
+                                )
+                                return
+                            continue
+
+                        if "text" in message and message["text"] is not None:
+                            data = json.loads(message["text"])
+                            if data.get("event") == "client_speech_start":
+                                await handle_barge_in("client_vad")
                 except WebSocketDisconnect:
-                    await stt_ws.close()
+                    try:
+                        await stt_ws.close()
+                    except Exception:
+                        pass
 
             async def pump_stt_events_to_orchestrator():
                 """Reads transcript events from the STT Service and drives the state machine."""
                 nonlocal current_response_task
+                nonlocal resume_timer_task
                 try:
                     async for message in stt_ws:
                         data = json.loads(message)
 
                         if data.get("event") == "speech_started":
-                            logger.info("[%s] speech_started received from STT", conn_id)
-                            # Caller started talking. If the bot is mid-response,
-                            # this is a real barge-in - stop everything now.
                             await client_ws.send_text(json.dumps({"event": "caller_speaking"}))
-                            await cancel_current_response()
+                            # STT's speech detection travels a full network
+                            # round trip (mic -> STT service -> Deepgram ->
+                            # back), so it's always later than the client's
+                            # local VAD, and in practice much noisier. Local
+                            # VAD owns interruption; STT owns transcription.
+                            # Set STT_BARGE_IN=true to re-enable it as a
+                            # backstop if local VAD is missing real speech.
+                            if STT_BARGE_IN_ENABLED:
+                                await handle_barge_in("stt")
                             continue
 
                         transcript = data.get("transcript")
                         if not transcript or not data.get("speech_final"):
                             continue  # only act once the caller has finished a full thought
+
+                        # A real new question - any pending resume is now
+                        # moot, the caller has moved on.
+                        await cancel_resume_timer()
+                        session.pending_resume_text = None
 
                         # Safety net: speech_started should already have
                         # cancelled anything in-flight by the time a final
