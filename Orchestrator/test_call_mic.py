@@ -84,6 +84,16 @@ async def call():
                             dtype="int16",
                         )
                         output_stream.start()
+                    elif data.get("event") == "bot_interrupted":
+                        # Caller talked over the bot - stop playback immediately,
+                        # discarding whatever was still buffered. abort() (unlike
+                        # stop()) cuts off right away instead of waiting for
+                        # buffered audio to finish playing.
+                        if output_stream is not None:
+                            output_stream.abort()
+                            output_stream.start()  # ready again for the next reply
+                        bot_is_speaking = False
+                        print(" [INTERRUPTED]")  # unmistakable, not just a blank line
                     elif data.get("event") == "caller_speaking":
                         print("(caller speaking...)")
                     elif data.get("event") == "bot_speech":
@@ -112,4 +122,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(call())
     except KeyboardInterrupt:
-        print("\nCall ended.")  
+        print("\nCall ended.")
