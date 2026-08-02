@@ -57,7 +57,53 @@ class NluClient:
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
 
-    def get_reply(self, conversation_history: list[dict]) -> str:
+    def _build_system_prompt(self, tenant_context: dict | None) -> str:
+        """
+        Combines the generic voice-assistant instructions with this
+        business's own context. Without tenant context this returns the
+        base prompt unchanged, so a call with no tenant still works.
+        """
+        if not tenant_context:
+            return self._system_prompt
+
+        parts = [self._system_prompt]
+
+        business_name = tenant_context.get("business_name")
+        if business_name:
+            parts.append(f"You are answering calls for: {business_name}.")
+
+        extra = tenant_context.get("system_prompt_extra")
+        if extra:
+            parts.append(extra)
+
+        capabilities = tenant_context.get("capabilities")
+        if capabilities:
+            listed = "; ".join(capabilities)
+            parts.append(
+                f"You can help with: {listed}. "
+                "If asked for something outside this, say plainly that you "
+                "can't help with that rather than improvising."
+            )
+
+        hours = tenant_context.get("business_hours")
+        if hours:
+            day_parts = []
+            for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+                value = hours.get(day)
+                day_parts.append(f"{day.capitalize()}: {value if value else 'closed'}")
+            timezone = hours.get("timezone", "UTC")
+            parts.append(f"Opening hours ({timezone}) - " + ", ".join(day_parts) + ".")
+
+        escalation = tenant_context.get("escalation_phone")
+        if escalation:
+            parts.append(
+                "If the caller asks for a human, or you cannot help them, "
+                f"offer to transfer them to {escalation}."
+            )
+
+        return "\n\n".join(parts)
+
+    def get_reply(self, conversation_history: list[dict], tenant_context: dict | None = None) -> str:
         """
         conversation_history: the FULL conversation so far, as a list of
         {"role": "user" | "assistant", "content": "..."} dicts. The system
@@ -65,7 +111,7 @@ class NluClient:
 
         Returns just the reply text.
         """
-        messages = [{"role": "system", "content": self._system_prompt}] + conversation_history
+        messages = [{"role": "system", "content": self._build_system_prompt(tenant_context)}] + conversation_history
 
         response = self._client.chat.completions.create(
             model=self._model,
@@ -80,7 +126,7 @@ class NluClient:
         )
         return response.choices[0].message.content or ""
 
-    async def get_reply_stream(self, conversation_history: list[dict]) -> AsyncIterator[str]:
+    async def get_reply_stream(self, conversation_history: list[dict], tenant_context: dict | None = None) -> AsyncIterator[str]:
         """
         Same as get_reply, but yields the reply as it's generated instead of
         waiting for the whole thing. This is what makes the bot feel
@@ -92,7 +138,7 @@ class NluClient:
         cumulative text so far) - the caller is responsible for
         accumulating them if it needs the full reply at the end.
         """
-        messages = [{"role": "system", "content": self._system_prompt}] + conversation_history
+        messages = [{"role": "system", "content": self._build_system_prompt(tenant_context)}] + conversation_history
 
         stream = await self._async_client.chat.completions.create(
             model=self._model,

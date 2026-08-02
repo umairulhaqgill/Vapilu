@@ -42,7 +42,12 @@ from local_vad import LocalVAD
 load_dotenv()
 
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN", "")
+# Set TENANT_ID in .env to test a specific business's bot; leave it
+# unset to use generic defaults.
+TENANT_ID = os.environ.get("TENANT_ID", "")
 SERVICE_URL = f"ws://localhost:8001/ws/call?token={ORCHESTRATOR_TOKEN}"
+if TENANT_ID:
+    SERVICE_URL += f"&tenant_id={TENANT_ID}"
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FRAME_MS = 20  # smaller frames than before: less buffered audio to be wrong about

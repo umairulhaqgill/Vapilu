@@ -83,6 +83,36 @@ RESUME_TIMEOUT_SECONDS = float(os.environ.get("RESUME_TIMEOUT_SECONDS", "1.5"))
 # events per call. Turn on only if local VAD is missing genuine speech.
 STT_BARGE_IN_ENABLED = os.environ.get("STT_BARGE_IN", "false").lower() == "true"
 
+TENANT_SERVICE_URL = os.environ.get("TENANT_SERVICE_URL", "http://localhost:8004")
+TENANT_SERVICE_TOKEN = os.environ.get("TENANT_SERVICE_TOKEN", "")
+
+DEFAULT_GREETING = "Hello! How can I help you today?"
+
+
+async def load_tenant(tenant_id: str | None) -> dict | None:
+    """
+    Fetches a tenant's config at call start. Returns None if no tenant was
+    specified, the tenant doesn't exist, or the service is unreachable - in
+    which case the Orchestrator falls back to generic defaults rather than
+    refusing the call. A config lookup failure shouldn't mean a customer
+    can't reach anyone.
+    """
+    if not tenant_id:
+        return None
+    try:
+        response = await http_client.get(
+            f"{TENANT_SERVICE_URL}/tenants/{tenant_id}",
+            params={"token": TENANT_SERVICE_TOKEN},
+        )
+        if response.status_code == 404:
+            logger.warning("Unknown tenant_id %r - using defaults", tenant_id)
+            return None
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.exception("Failed to load tenant %r: %s", tenant_id, e)
+        return None
+
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN")
 if not ORCHESTRATOR_TOKEN:
     logger.warning(
@@ -173,22 +203,37 @@ async def speak_text(tts_ws, client_ws, text: str, clock: "PlaybackClock"):
         logger.exception("TTS Service call failed: %s", e)
 
 
-async def stream_nlu_reply(conversation_history: list[dict]):
+async def stream_nlu_reply(conversation_history: list[dict], tenant: dict | None = None):
     """
     Calls the NLU/LLM Service's streaming endpoint and yields text deltas as
     they arrive - this is what lets the Orchestrator react to the first few
     words instead of waiting for the whole reply to finish generating.
 
+    The tenant's system_prompt_extra (and other context like business name
+    and capabilities) is passed along so the LLM knows which business it's
+    answering for. The NLU service stays stateless - it doesn't look
+    tenants up itself, it just uses whatever context it's given.
+
     If the service is unreachable or errors before yielding anything, yields
     one safe fallback message instead - a call in progress shouldn't die
     just because one downstream service hiccuped.
     """
+    payload = {"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history}
+    if tenant:
+        payload["tenant_context"] = {
+            "business_name": tenant.get("business_name"),
+            "system_prompt_extra": tenant.get("system_prompt_extra", ""),
+            "capabilities": tenant.get("capabilities", []),
+            "business_hours": tenant.get("business_hours"),
+            "escalation_phone": tenant.get("escalation_phone"),
+        }
+
     yielded_anything = False
     try:
         async with http_client.stream(
             "POST",
             NLU_SERVICE_URL,
-            json={"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history},
+            json=payload,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -217,6 +262,7 @@ async def health():
 async def handle_call(
     client_ws: WebSocket,
     token: str | None = None,
+    tenant_id: str | None = None,
     encoding: str = "linear16",
     sample_rate: int = 16000,
 ):
@@ -229,7 +275,14 @@ async def handle_call(
 
     await client_ws.accept()
     session = CallSession(conn_id)
-    logger.info("[%s] call started", conn_id)
+    session.tenant = await load_tenant(tenant_id)
+    if session.tenant:
+        logger.info(
+            "[%s] call started for tenant %s (%s)",
+            conn_id, tenant_id, session.tenant.get("business_name"),
+        )
+    else:
+        logger.info("[%s] call started (no tenant - using defaults)", conn_id)
 
     stt_url = f"{STT_SERVICE_URL}?token={STT_SERVICE_TOKEN}&encoding={encoding}&sample_rate={sample_rate}"
     tts_url = f"{TTS_SERVICE_URL}?token={TTS_SERVICE_TOKEN}"
@@ -304,7 +357,10 @@ async def handle_call(
 
             async def speak_greeting():
                 await session.transition(CallState.GREETING)
-                greeting_text = "Hello! How can I help you today?"
+                greeting_text = (
+                    session.tenant.get("greeting", DEFAULT_GREETING)
+                    if session.tenant else DEFAULT_GREETING
+                )
                 await client_ws.send_text(json.dumps({"event": "bot_speech", "text": greeting_text}))
                 try:
                     clock = PlaybackClock(audio_format)
@@ -372,7 +428,9 @@ async def handle_call(
 
                 await session.transition(CallState.RESPONDING)
                 try:
-                    full_reply = await speak_reply_text(stream_nlu_reply(session.conversation_history))
+                    full_reply = await speak_reply_text(
+                        stream_nlu_reply(session.conversation_history, session.tenant)
+                    )
                 except asyncio.CancelledError:
                     # Caller talked over the bot. speak_reply_text has
                     # already stashed whatever partial text existed into
@@ -609,4 +667,4 @@ async def handle_call(
             except Exception:
                 pass
         await session.transition(CallState.CLOSED)
-        logger.info("[%s] call ended", conn_id) 
+        logger.info("[%s] call ended", conn_id)

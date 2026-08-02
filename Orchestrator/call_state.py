@@ -32,6 +32,17 @@ class CallSession:
         # thing that makes the bot "remember" earlier parts of the same call;
         # the NLU Service itself is stateless and relies entirely on this.
         self.conversation_history: list[dict] = []
+        # If a response gets interrupted and the caller doesn't follow up
+        # with anything new within a short grace period, this holds
+        # whatever partial reply text had already been generated before
+        # the interruption - so it can be resumed instead of just dropped.
+        # None means there's nothing pending to resume.
+        self.pending_resume_text: str | None = None
+        # This call's tenant configuration (greeting, system prompt, hours,
+        # etc). Loaded once at call start from the Tenant Config Service.
+        # None means no tenant was specified or lookup failed - the
+        # Orchestrator falls back to generic defaults in that case.
+        self.tenant: dict | None = None
 
     async def transition(self, new_state: CallState):
         logger.info("[%s] state: %s -> %s", self.conn_id, self.state, new_state)

@@ -22,6 +22,7 @@ edit the four lines below before running.
 $sttDir  = Join-Path $PSScriptRoot "STT"
 $nluDir  = Join-Path $PSScriptRoot "NLU"
 $ttsDir  = Join-Path $PSScriptRoot "TTS"
+$tenantDir = Join-Path $PSScriptRoot "TenantConfig"
 $orchDir = Join-Path $PSScriptRoot "Orchestrator"
 
 function Stop-PortIfInUse($port) {
@@ -107,6 +108,10 @@ if (-not (Test-Path $ttsDir)) {
     Write-Host "Can't find TTS project folder at: $ttsDir" -ForegroundColor Red
     exit 1
 }
+if (-not (Test-Path $tenantDir)) {
+    Write-Host "Can't find TenantConfig project folder at: $tenantDir" -ForegroundColor Red
+    exit 1
+}
 if (-not (Test-Path $orchDir)) {
     Write-Host "Can't find Orchestrator project folder at: $orchDir" -ForegroundColor Red
     exit 1
@@ -115,6 +120,7 @@ if (-not (Test-Path $orchDir)) {
 $sttLauncher  = Join-Path $sttDir "start_stt.ps1"
 $nluLauncher  = Join-Path $nluDir "start_nlu.ps1"
 $ttsLauncher  = Join-Path $ttsDir "start_tts.ps1"
+$tenantLauncher = Join-Path $tenantDir "start_tenant.ps1"
 $orchLauncher = Join-Path $orchDir "start_orchestrator.ps1"
 
 if (-not (Test-Path $sttLauncher)) {
@@ -129,16 +135,21 @@ if (-not (Test-Path $ttsLauncher)) {
     Write-Host "Missing $ttsLauncher - copy start_tts.ps1 into your TTS folder first." -ForegroundColor Red
     exit 1
 }
+if (-not (Test-Path $tenantLauncher)) {
+    Write-Host "Missing $tenantLauncher - copy start_tenant.ps1 into your TenantConfig folder first." -ForegroundColor Red
+    exit 1
+}
 if (-not (Test-Path $orchLauncher)) {
     Write-Host "Missing $orchLauncher - copy start_orchestrator.ps1 into your Orchestrator folder first." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "Freeing ports 8000, 8001, 8002, and 8003 if anything is already using them..."
+Write-Host "Freeing ports 8000-8004 if anything is already using them..."
 Stop-PortIfInUse 8000
 Stop-PortIfInUse 8001
 Stop-PortIfInUse 8002
 Stop-PortIfInUse 8003
+Stop-PortIfInUse 8004
 Write-Host ""
 
 Write-Host "Starting STT Service (port 8000) in a new window..."
@@ -149,6 +160,9 @@ Start-Process powershell -ArgumentList "-NoExit", "-File", $nluLauncher
 
 Write-Host "Starting TTS Service (port 8003) in a new window..."
 Start-Process powershell -ArgumentList "-NoExit", "-File", $ttsLauncher
+
+Write-Host "Starting Tenant Config Service (port 8004) in a new window..."
+Start-Process powershell -ArgumentList "-NoExit", "-File", $tenantLauncher
 
 Write-Host "Starting Orchestrator (port 8001) in a new window..."
 Start-Process powershell -ArgumentList "-NoExit", "-File", $orchLauncher
@@ -182,15 +196,22 @@ if (-not $ttsOk) {
     exit 1
 }
 
+$tenantOk = Wait-ForHealth "127.0.0.1" 8004 "Tenant Config Service" 30
+if (-not $tenantOk) {
+    Write-Host ""
+    Write-Host "Stopping here since Tenant Config Service isn't healthy." -ForegroundColor Red
+    exit 1
+}
+
 $orchOk = Wait-ForHealth "127.0.0.1" 8001 "Orchestrator" 30
 if (-not $orchOk) {
     exit 1
 }
 
 Write-Host ""
-Write-Host "All four services are healthy. Starting the mic test client..." -ForegroundColor Cyan
+Write-Host "All five services are healthy. Starting the mic test client..." -ForegroundColor Cyan
 Write-Host "Speak into your mic. Press Ctrl+C here to end the test." -ForegroundColor Cyan
-Write-Host "(The four service windows will keep running after this ends - close them manually when you're done.)"
+Write-Host "(The five service windows will keep running after this ends - close them manually when you're done.)"
 Write-Host ""
 
 Set-Location $orchDir

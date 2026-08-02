@@ -50,6 +50,10 @@ class Turn(BaseModel):
 class ReplyRequest(BaseModel):
     conversation_history: list[Turn]
     token: str | None = None
+    # Per-business context supplied by the Orchestrator (business name,
+    # extra instructions, capabilities, hours). This service stays stateless
+    # - it never looks tenants up itself, it just uses what it's handed.
+    tenant_context: dict | None = None
 
 
 @app.get("/health")
@@ -67,7 +71,7 @@ async def reply(request: ReplyRequest):
     history = [{"role": t["role"], "content": t["content"]} for t in history]
 
     try:
-        reply_text = nlu.get_reply(history)
+        reply_text = nlu.get_reply(history, request.tenant_context)
     except Exception as e:
         logger.exception("NLU reply failed: %s", e)
         raise HTTPException(status_code=502, detail=f"reply generation failed: {e}")
@@ -95,7 +99,7 @@ async def reply_stream(request: ReplyRequest):
 
     async def generate():
         try:
-            async for delta in nlu.get_reply_stream(history):
+            async for delta in nlu.get_reply_stream(history, request.tenant_context):
                 yield json.dumps({"delta": delta}) + "\n"
             yield json.dumps({"done": True}) + "\n"
         except Exception as e:
