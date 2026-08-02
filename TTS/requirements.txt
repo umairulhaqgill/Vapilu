@@ -1,0 +1,7 @@
+piper-tts>=1.6.0
+fastapi>=0.141.0
+uvicorn[standard]>=0.52.0
+python-dotenv>=1.0.0
+websockets>=17.0
+sounddevice>=0.5.0
+numpy>=1.26.0
