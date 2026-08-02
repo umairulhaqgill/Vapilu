@@ -1,19 +1,20 @@
 """
 Streams your mic into the Orchestrator (not directly into the STT Service)
 so you can test the full chain: mic -> Orchestrator -> STT Service ->
-Deepgram -> transcript -> Orchestrator's state machine -> placeholder reply.
+Deepgram -> transcript -> NLU Service -> TTS Service -> spoken audio back
+to you, through your speakers.
 
-Requires both services already running:
-    Terminal 1 (in stt-service/):    uvicorn stt_service:app --reload --port 8000
-    Terminal 2 (in orchestrator/):   uvicorn orchestrator_service:app --reload --port 8001
+Requires all three backing services already running (see run_all.ps1),
+plus the Orchestrator itself:
+    uvicorn orchestrator_service:app --reload --port 8001
 
-Then, in a third terminal (in orchestrator/):
+Then:
     python test_call_mic.py
 
-Speak into your mic. You'll see:
-  - the bot's greeting immediately
-  - "(caller speaking...)" the instant you start talking
-  - the bot's (placeholder) reply after you pause
+Speak into your mic. You'll hear:
+  - the bot's spoken greeting immediately
+  - "(caller speaking...)" printed the instant you start talking
+  - the bot's actual spoken reply after you pause
 
 Press Ctrl+C to stop.
 """
@@ -39,6 +40,7 @@ BLOCK_MS = 100
 async def call():
     loop = asyncio.get_event_loop()
     audio_queue: asyncio.Queue = asyncio.Queue()
+    output_stream = None  # created once we learn the audio format from the server
 
     def on_audio_block(indata, frames, time_info, status):
         if status:
@@ -62,10 +64,27 @@ async def call():
                     await ws.send(chunk)
 
             async def receiver():
+                nonlocal output_stream
                 bot_is_speaking = False
                 async for message in ws:
+                    if isinstance(message, bytes):
+                        # Raw PCM audio from the bot's TTS - play it as it arrives.
+                        # A plain blocking write is fine for a manual test script
+                        # like this; a production client would want a proper
+                        # non-blocking playback queue instead.
+                        if output_stream is not None:
+                            output_stream.write(message)
+                        continue
+
                     data = json.loads(message)
-                    if data.get("event") == "caller_speaking":
+                    if data.get("event") == "audio_format":
+                        output_stream = sd.RawOutputStream(
+                            samplerate=data["sample_rate"],
+                            channels=data["channels"],
+                            dtype="int16",
+                        )
+                        output_stream.start()
+                    elif data.get("event") == "caller_speaking":
                         print("(caller speaking...)")
                     elif data.get("event") == "bot_speech":
                         print(f"Bot: {data['text']}")
@@ -81,11 +100,16 @@ async def call():
                         print(f"[error] {data['error']}: {data.get('detail')}")
 
             print("Call connected. Speak into your mic. Ctrl+C to stop.\n")
-            await asyncio.gather(sender(), receiver())
+            try:
+                await asyncio.gather(sender(), receiver())
+            finally:
+                if output_stream is not None:
+                    output_stream.stop()
+                    output_stream.close()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(call())
     except KeyboardInterrupt:
-        print("\nCall ended.") 
+        print("\nCall ended.")  
