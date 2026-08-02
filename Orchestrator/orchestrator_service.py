@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 import websockets
@@ -36,7 +37,22 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("orchestrator")
 
-app = FastAPI(title="Orchestrator")
+# One shared HTTP client for the whole process, instead of opening a new
+# connection on every single turn. On localhost this saves relatively
+# little, but it's the correct pattern regardless of where the NLU Service
+# ends up running later, and costs nothing to do now.
+http_client: httpx.AsyncClient | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client
+    http_client = httpx.AsyncClient(timeout=30.0)
+    yield
+    await http_client.aclose()
+
+
+app = FastAPI(title="Orchestrator", lifespan=lifespan)
 
 STT_SERVICE_URL = os.environ.get("STT_SERVICE_URL", "ws://localhost:8000/ws/transcribe")
 STT_SERVICE_TOKEN = os.environ.get("STT_SERVICE_TOKEN", "")
@@ -64,23 +80,22 @@ async def stream_nlu_reply(conversation_history: list[dict]):
     """
     yielded_anything = False
     try:
-        async with httpx.AsyncClient(timeout=30.0) as http_client:
-            async with http_client.stream(
-                "POST",
-                NLU_SERVICE_URL,
-                json={"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history},
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    if "delta" in data:
-                        yielded_anything = True
-                        yield data["delta"]
-                    elif "error" in data:
-                        logger.error("NLU Service reported an error mid-stream: %s", data["error"])
-                        break
+        async with http_client.stream(
+            "POST",
+            NLU_SERVICE_URL,
+            json={"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history},
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                data = json.loads(line)
+                if "delta" in data:
+                    yielded_anything = True
+                    yield data["delta"]
+                elif "error" in data:
+                    logger.error("NLU Service reported an error mid-stream: %s", data["error"])
+                    break
     except Exception as e:
         logger.exception("NLU Service call failed: %s", e)
 

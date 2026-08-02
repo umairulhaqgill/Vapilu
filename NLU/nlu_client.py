@@ -43,7 +43,7 @@ class NluClient:
         api_key: str | None = None,
         model: str = "anthropic/claude-sonnet-4.6",
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-        max_tokens: int = 300,
+        max_tokens: int = 150,
     ):
         key = api_key or os.environ.get("OPENROUTER_API_KEY")
         if not key:

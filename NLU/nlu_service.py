@@ -29,7 +29,10 @@ logger = logging.getLogger("nlu-service")
 
 app = FastAPI(title="NLU/LLM Service")
 
-nlu = NluClient()  # reads OPENROUTER_API_KEY from environment
+nlu = NluClient(
+    model=os.environ.get("NLU_MODEL", "anthropic/claude-sonnet-4.6"),
+    max_tokens=int(os.environ.get("NLU_MAX_TOKENS", "150")),
+)
 
 NLU_SERVICE_TOKEN = os.environ.get("NLU_SERVICE_TOKEN")
 if not NLU_SERVICE_TOKEN:
