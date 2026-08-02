@@ -91,23 +91,59 @@ if not ORCHESTRATOR_TOKEN:
     )
 
 
-async def speak_text(tts_ws, client_ws, text: str, audio_format: dict):
+class PlaybackClock:
+    """
+    Tracks when the audio we've sent will actually finish playing.
+
+    Why this exists: the enclosing response task must stay alive as long as
+    the caller is still HEARING the reply, otherwise barge-in has nothing to
+    cancel (see handle_call). But sleeping after each individual sentence -
+    the obvious way to do that - blocks the next sentence's synthesis until
+    the previous one finishes playing, which inserts an audible gap of
+    silence between every sentence while TTS works.
+
+    Instead we track a running deadline: each sentence's audio pushes the
+    deadline out by its own duration, and we only actually sleep once at the
+    end. Synthesis for sentence 2 therefore happens WHILE sentence 1 is
+    still playing on the client (whose queue preserves ordering), so the
+    audio comes out continuous.
+    """
+
+    def __init__(self, audio_format: dict):
+        self._bytes_per_second = (
+            audio_format["sample_rate"] * audio_format["sample_width"] * audio_format["channels"]
+        )
+        self._deadline: float | None = None
+
+    def add_audio(self, num_bytes: int):
+        if self._bytes_per_second <= 0 or num_bytes <= 0:
+            return
+        duration = num_bytes / self._bytes_per_second
+        now = asyncio.get_event_loop().time()
+        # If previous audio has already finished playing, this starts now;
+        # otherwise it queues behind what's still playing.
+        start_from = max(now, self._deadline) if self._deadline is not None else now
+        self._deadline = start_from + duration
+
+    async def wait_until_finished(self):
+        if self._deadline is None:
+            return
+        remaining = self._deadline - asyncio.get_event_loop().time()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+
+async def speak_text(tts_ws, client_ws, text: str, clock: "PlaybackClock"):
     """
     Sends one complete sentence to the (already open, persistent) TTS
     Service connection and relays the resulting audio straight to the
     caller as it's generated. This is what actually lets the bot start
     speaking sentence 1 while the LLM is still generating sentence 2.
 
-    Important: after relaying all the audio bytes, this waits for roughly
-    how long that audio actually takes to play back before returning.
-    Without this, relaying bytes over localhost is basically instant, so
-    the enclosing response task would be marked "done" long before the
-    caller has actually finished HEARING the reply - meaning a barge-in
-    attempt while audio is still audibly playing would find nothing left
-    to cancel. This keeps the task's lifetime honest against real playback
-    time, which is exactly what the cancellation check in handle_call
-    depends on. It costs nothing in perceived latency - the caller was
-    always going to spend this long listening anyway.
+    Returns as soon as the audio has been relayed - it does NOT wait for
+    playback. The caller records the duration on the shared PlaybackClock
+    and waits once at the end instead, so synthesis of the next sentence
+    overlaps with playback of this one.
 
     Failures here are logged and swallowed, not raised - losing the audio
     for one sentence shouldn't end the whole call.
@@ -132,11 +168,7 @@ async def speak_text(tts_ws, client_ws, text: str, audio_format: dict):
                     logger.error("TTS Service reported an error: %s", data.get("detail"))
                     break
 
-        bytes_per_second = (
-            audio_format["sample_rate"] * audio_format["sample_width"] * audio_format["channels"]
-        )
-        if bytes_per_second > 0 and bytes_sent > 0:
-            await asyncio.sleep(bytes_sent / bytes_per_second)
+        clock.add_audio(bytes_sent)
     except Exception as e:
         logger.exception("TTS Service call failed: %s", e)
 
@@ -275,7 +307,9 @@ async def handle_call(
                 greeting_text = "Hello! How can I help you today?"
                 await client_ws.send_text(json.dumps({"event": "bot_speech", "text": greeting_text}))
                 try:
-                    await speak_text(tts_box["ws"], client_ws, greeting_text, audio_format)
+                    clock = PlaybackClock(audio_format)
+                    await speak_text(tts_box["ws"], client_ws, greeting_text, clock)
+                    await clock.wait_until_finished()
                     await session.transition(CallState.LISTENING)
                 except asyncio.CancelledError:
                     logger.info("[%s] greeting interrupted by caller", conn_id)
@@ -299,6 +333,7 @@ async def handle_call(
                 """
                 full_reply = ""
                 chunker = SentenceChunker()
+                clock = PlaybackClock(audio_format)
                 try:
                     async for delta in full_text_source:
                         full_reply += delta
@@ -307,11 +342,16 @@ async def handle_call(
                             "text": delta,
                         }))
                         for sentence in chunker.add(delta):
-                            await speak_text(tts_box["ws"], client_ws, sentence, audio_format)
+                            await speak_text(tts_box["ws"], client_ws, sentence, clock)
 
                     remainder = chunker.flush()
                     if remainder:
-                        await speak_text(tts_box["ws"], client_ws, remainder, audio_format)
+                        await speak_text(tts_box["ws"], client_ws, remainder, clock)
+
+                    # Stay alive until the caller has actually finished
+                    # hearing everything, so barge-in still has something to
+                    # cancel during playback.
+                    await clock.wait_until_finished()
 
                     return full_reply
                 except asyncio.CancelledError:
