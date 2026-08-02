@@ -41,7 +41,7 @@ app = FastAPI(title="Orchestrator")
 STT_SERVICE_URL = os.environ.get("STT_SERVICE_URL", "ws://localhost:8000/ws/transcribe")
 STT_SERVICE_TOKEN = os.environ.get("STT_SERVICE_TOKEN", "")
 
-NLU_SERVICE_URL = os.environ.get("NLU_SERVICE_URL", "http://localhost:8002/reply")
+NLU_SERVICE_URL = os.environ.get("NLU_SERVICE_URL", "http://localhost:8002/reply/stream")
 NLU_SERVICE_TOKEN = os.environ.get("NLU_SERVICE_TOKEN", "")
 
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN")
@@ -52,24 +52,40 @@ if not ORCHESTRATOR_TOKEN:
     )
 
 
-async def get_nlu_reply(conversation_history: list[dict]) -> str:
+async def stream_nlu_reply(conversation_history: list[dict]):
     """
-    Calls the NLU/LLM Service with the full conversation so far and returns
-    its reply. Falls back to a safe, spoken-friendly message if the service
-    is unreachable or errors — a call in progress shouldn't die just because
-    one downstream service hiccuped.
+    Calls the NLU/LLM Service's streaming endpoint and yields text deltas as
+    they arrive - this is what lets the Orchestrator react to the first few
+    words instead of waiting for the whole reply to finish generating.
+
+    If the service is unreachable or errors before yielding anything, yields
+    one safe fallback message instead - a call in progress shouldn't die
+    just because one downstream service hiccuped.
     """
+    yielded_anything = False
     try:
-        async with httpx.AsyncClient(timeout=10.0) as http_client:
-            response = await http_client.post(
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            async with http_client.stream(
+                "POST",
                 NLU_SERVICE_URL,
                 json={"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history},
-            )
-            response.raise_for_status()
-            return response.json()["reply"]
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if "delta" in data:
+                        yielded_anything = True
+                        yield data["delta"]
+                    elif "error" in data:
+                        logger.error("NLU Service reported an error mid-stream: %s", data["error"])
+                        break
     except Exception as e:
         logger.exception("NLU Service call failed: %s", e)
-        return "Sorry, I'm having trouble understanding right now. Could you say that again?"
+
+    if not yielded_anything:
+        yield "Sorry, I'm having trouble understanding right now. Could you say that again?"
 
 
 @app.get("/health")
@@ -141,16 +157,21 @@ async def handle_call(
                         logger.info("[%s] caller said: %s", conn_id, transcript)
 
                         session.conversation_history.append({"role": "user", "content": transcript})
-                        reply_text = await get_nlu_reply(session.conversation_history)
-                        session.conversation_history.append({"role": "assistant", "content": reply_text})
 
                         await session.transition(CallState.RESPONDING)
-                        await client_ws.send_text(json.dumps({
-                            "event": "bot_speech",
-                            "text": reply_text,
-                            # TTS Service doesn't exist yet — sending text instead of audio.
-                        }))
+                        full_reply = ""
+                        async for delta in stream_nlu_reply(session.conversation_history):
+                            full_reply += delta
+                            await client_ws.send_text(json.dumps({
+                                "event": "bot_speech_chunk",
+                                "text": delta,
+                                # TTS Service doesn't exist yet - once it does, each
+                                # delta gets synthesized and played as it arrives,
+                                # instead of waiting for full_reply to be complete.
+                            }))
+                        await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
 
+                        session.conversation_history.append({"role": "assistant", "content": full_reply})
                         await session.transition(CallState.LISTENING)
                 except ConnectionClosed:
                     # Expected once the caller disconnects and we close the

@@ -62,12 +62,21 @@ async def call():
                     await ws.send(chunk)
 
             async def receiver():
+                bot_is_speaking = False
                 async for message in ws:
                     data = json.loads(message)
                     if data.get("event") == "caller_speaking":
                         print("(caller speaking...)")
                     elif data.get("event") == "bot_speech":
                         print(f"Bot: {data['text']}")
+                    elif data.get("event") == "bot_speech_chunk":
+                        if not bot_is_speaking:
+                            print("Bot: ", end="", flush=True)
+                            bot_is_speaking = True
+                        print(data["text"], end="", flush=True)
+                    elif data.get("event") == "bot_speech_end":
+                        print()  # newline after the streamed reply finishes
+                        bot_is_speaking = False
                     elif "error" in data:
                         print(f"[error] {data['error']}: {data.get('detail')}")
 
@@ -79,4 +88,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(call())
     except KeyboardInterrupt:
-        print("\nCall ended.")
+        print("\nCall ended.") 

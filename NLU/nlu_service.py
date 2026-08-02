@@ -12,11 +12,13 @@ Run with:
     uvicorn nlu_service:app --reload --port 8002
 """
 
+import json
 import logging
 import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from nlu_client import NluClient
@@ -27,7 +29,7 @@ logger = logging.getLogger("nlu-service")
 
 app = FastAPI(title="NLU/LLM Service")
 
-nlu = NluClient()  # reads ANTHROPIC_API_KEY from environment
+nlu = NluClient()  # reads OPENROUTER_API_KEY from environment
 
 NLU_SERVICE_TOKEN = os.environ.get("NLU_SERVICE_TOKEN")
 if not NLU_SERVICE_TOKEN:
@@ -68,3 +70,33 @@ async def reply(request: ReplyRequest):
         raise HTTPException(status_code=502, detail=f"reply generation failed: {e}")
 
     return {"reply": reply_text}
+
+
+@app.post("/reply/stream")
+async def reply_stream(request: ReplyRequest):
+    """
+    Same as /reply, but streams the response as newline-delimited JSON
+    instead of waiting for the whole reply. Each line is one of:
+      {"delta": "..."}          - a small chunk of new text
+      {"done": true}            - the reply is complete
+      {"error": "..."}          - something went wrong mid-stream
+
+    This is what actually makes the bot feel fast: the Orchestrator can
+    start acting on the first few words immediately instead of waiting for
+    the whole sentence (or paragraph) to finish generating.
+    """
+    if NLU_SERVICE_TOKEN and request.token != NLU_SERVICE_TOKEN:
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+
+    history = [{"role": t.role, "content": t.content} for t in request.conversation_history]
+
+    async def generate():
+        try:
+            async for delta in nlu.get_reply_stream(history):
+                yield json.dumps({"delta": delta}) + "\n"
+            yield json.dumps({"done": True}) + "\n"
+        except Exception as e:
+            logger.exception("NLU streaming reply failed: %s", e)
+            yield json.dumps({"error": str(e)}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
