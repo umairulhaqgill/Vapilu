@@ -17,7 +17,10 @@ export interface CallSessionCallbacks {
   onLevel?: (rms: number) => void;
 }
 
-const DEFAULT_URL = "ws://localhost:8001/ws/call";
+// See api.ts for why this reuses window.location.hostname rather than a
+// hardcoded default - a LAN IP set in .env goes stale on every DHCP
+// renewal, this doesn't.
+const DEFAULT_URL = `ws://${window.location.hostname}:8001/ws/call`;
 const MIC_SAMPLE_RATE = 16000;
 
 // Plays the same role as Orchestrator/test_call_mic.py, but as a browser

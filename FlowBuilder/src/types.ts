@@ -63,6 +63,33 @@ export interface FlowConfig {
   on_failure?: string | null;
 }
 
+// Mirrors TenantConfig/tenant_config.py.
+
+export interface BusinessHours {
+  monday?: string | null;
+  tuesday?: string | null;
+  wednesday?: string | null;
+  thursday?: string | null;
+  friday?: string | null;
+  saturday?: string | null;
+  sunday?: string | null;
+  timezone: string;
+}
+
+export interface TenantConfig {
+  tenant_id: string;
+  business_name: string;
+  greeting: string;
+  system_prompt_extra: string;
+  language: string;
+  voice?: string | null;
+  business_hours: BusinessHours;
+  escalation_phone?: string | null;
+  capabilities: string[];
+  enabled_connectors: string[];
+  active: boolean;
+}
+
 export function emptyNode(type: NodeType): FlowNode {
   return {
     type,

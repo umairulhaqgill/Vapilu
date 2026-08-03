@@ -5,10 +5,11 @@ import type { FlowConfig } from "../types";
 interface Props {
   tenantId: string;
   onOpenFlow: (flowId: string) => void;
+  onOpenSettings: () => void;
   onBack: () => void;
 }
 
-export default function FlowList({ tenantId, onOpenFlow, onBack }: Props) {
+export default function FlowList({ tenantId, onOpenFlow, onOpenSettings, onBack }: Props) {
   const [flows, setFlows] = useState<FlowConfig[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -79,6 +80,8 @@ export default function FlowList({ tenantId, onOpenFlow, onBack }: Props) {
       <div className="page-header">
         <button type="button" onClick={onBack}>&larr; Tenants</button>
         <h2>{tenantId}</h2>
+        <div className="spacer" />
+        <button type="button" onClick={onOpenSettings}>Settings</button>
       </div>
 
       {error && <p className="error">{error}</p>}

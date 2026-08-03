@@ -184,21 +184,33 @@ class PlaybackClock:
             await asyncio.sleep(remaining)
 
 
-def _fallback_ack(run, extracted: dict) -> str:
+def _fallback_ack(run) -> str:
     """
-    Spoken filler for a turn where the model recorded details via tool
-    call but said nothing else (see the call site in speak_reply_text).
+    Spoken filler for a turn where nothing got said out loud - neither the
+    LLM nor a flow `say` node (see the call site in respond_to, AFTER the
+    flow has applied this turn's values and advanced). Names whatever the
+    flow needs next rather than a dead-end "thanks", so the conversation
+    keeps moving instead of making the caller prompt again just to hear
+    the next question. Call this post-advance, not from inside
+    speak_reply_text - beforehand, `run` still reflects the PREVIOUS turn
+    and would ask about a field the caller may have just answered.
 
-    `run` still reflects state from BEFORE this turn's extraction is
-    applied - that happens later, in respond_to, after speak_reply_text
-    returns - so `extracted` (this turn's fresh values) is subtracted
-    separately rather than re-reading run.values, or this would just ask
-    for the field the caller already answered.
+    Two shapes of "next", both real fields on FlowRun:
+    - CONFIRMING: every required field for this node is already in, so
+      extraction_fields() is empty - there's nothing left to COLLECT, but
+      there IS a rendered confirm line waiting to be read back. Missing
+      this case was the actual bug: a turn that happened to complete the
+      LAST field landed here with nothing to say, same as true silence.
+    - Otherwise: name the next still-missing field, same as before.
     """
     if run is not None:
-        for f in run.extraction_fields():
-            if f["name"] not in extracted:
-                return f"Got it. And {f['prompt']}?"
+        if run.status == RunStatus.CONFIRMING:
+            confirm = run.rendered_confirm()
+            if confirm:
+                return confirm
+        missing = run.extraction_fields()
+        if missing:
+            return f"Got it. And {missing[0]['prompt']}?"
     return "Got it, thanks."
 
 
@@ -472,22 +484,14 @@ async def handle_call(
                     if remainder:
                         await speak_text(tts_box["ws"], client_ws, remainder, clock)
 
-                    if not full_reply.strip() and extracted_all:
-                        # The model recorded details via the tool call but
-                        # said nothing out loud. The system prompt tells it
-                        # not to do this, but smaller/local models don't
-                        # follow that reliably - and silence here reads as
-                        # "the call dropped" to a caller, who just repeats
-                        # themselves next. Always say SOMETHING - and if a
-                        # flow is running, ask for whatever's still needed
-                        # instead of a dead-end "thanks", so the caller
-                        # doesn't have to prompt again just to keep going.
-                        full_reply = _fallback_ack(session.active_flow, extracted_all)
-                        await client_ws.send_text(json.dumps({
-                            "event": "bot_speech_chunk",
-                            "text": full_reply,
-                        }))
-                        await speak_text(tts_box["ws"], client_ws, full_reply, clock)
+                    # Whether the model said nothing at all this turn (just
+                    # a silent tool call) gets handled by the caller of this
+                    # function, in respond_to - not here. At this point the
+                    # flow's extraction hasn't been applied or advanced yet,
+                    # so any "what's still needed" fallback built here would
+                    # be asking about a field the caller may have JUST
+                    # answered, or missing that the flow has already moved
+                    # on to a different step entirely.
 
                     # Stay alive until the caller has actually finished
                     # hearing everything, so barge-in still has something to
@@ -570,6 +574,8 @@ async def handle_call(
                 session.conversation_history.append({"role": "assistant", "content": full_reply})
 
                 # --- Start a flow if the caller asked for one ---
+                spoke_anything = bool(full_reply.strip())
+
                 if not session.active_flow and extracted.get("_start_flow"):
                     chosen = pick_flow(session.flows, extracted["_start_flow"])
                     if chosen:
@@ -582,7 +588,7 @@ async def handle_call(
                         if details:
                             session.active_flow.apply_values(details)
                             session.active_flow.advance()
-                        await drive_flow(session.active_flow)
+                        spoke_anything = await drive_flow(session.active_flow) or spoke_anything
 
                 # --- Apply anything new the caller told us ---
                 elif session.active_flow and extracted:
@@ -602,23 +608,51 @@ async def handle_call(
                                 session.active_flow.current,
                                 session.active_flow.status.value,
                                 list(session.active_flow.values))
-                    await drive_flow(session.active_flow)
+                    spoke_anything = await drive_flow(session.active_flow) or spoke_anything
+
+                # Nothing was said this whole turn - not the NLU reply, not
+                # a say node. Almost always a silent tool-call-only reply
+                # from the LLM (the system prompt tells it not to do this,
+                # but smaller/local models don't follow that reliably) -
+                # left alone, this reads as a dropped call to the caller,
+                # who just repeats themselves. Ask for whatever the flow
+                # needs now (AFTER advance(), so it reflects where the
+                # flow actually is, not where it was before this turn).
+                if not spoke_anything and session.active_flow and session.active_flow.status not in (
+                    RunStatus.DONE, RunStatus.HANDOFF,
+                ):
+                    fallback = _fallback_ack(session.active_flow)
+                    clock = PlaybackClock(audio_format)
+                    await client_ws.send_text(json.dumps({"event": "bot_speech_chunk", "text": fallback}))
+                    await speak_text(tts_box["ws"], client_ws, fallback, clock)
+                    await clock.wait_until_finished()
+                    await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
+                    session.conversation_history.append({"role": "assistant", "content": fallback})
 
                 await session.transition(CallState.LISTENING)
 
-            async def drive_flow(run):
+            async def drive_flow(run) -> bool:
                 """
                 Drains whatever the graph produced this turn: speaks `say`
                 nodes, runs `action` nodes, handles handoff. Loops because
                 one turn can pass through several non-interactive nodes
                 (action -> say -> say) before it needs the caller again.
+
+                Returns whether it actually spoke anything (a `say` node's
+                text) - respond_to uses this to know whether the caller
+                heard ANYTHING at all this turn, since a collect node
+                speaks nothing here by design (see the flow model: the LLM
+                phrases collection questions itself, next turn). If neither
+                the LLM nor a say node said anything, respond_to needs to
+                say something anyway rather than leave dead air.
                 """
+                spoke = False
                 guard = 0
                 while True:
                     guard += 1
                     if guard > 10:
                         logger.error("[%s] flow driver spun 10 times - stopping", conn_id)
-                        return
+                        return spoke
 
                     text = run.take_pending_say()
                     if text:
@@ -627,6 +661,7 @@ async def handle_call(
                         await clock.wait_until_finished()
                         session.conversation_history.append({"role": "assistant", "content": text})
                         run.continue_after_say()
+                        spoke = True
                         continue
 
                     if run.status == RunStatus.ACTING and run.pending_action:
@@ -654,7 +689,7 @@ async def handle_call(
                         }))
                         logger.info("[%s] flow %s requested handoff", conn_id, run.flow_id)
                         session.active_flow = None
-                        return
+                        return spoke
 
                     if run.status == RunStatus.DONE:
                         logger.info("[%s] flow %s complete, values=%s", conn_id,
@@ -665,9 +700,9 @@ async def handle_call(
                             "values": {k: v for k, v in run.values.items()},
                         }))
                         session.active_flow = None
-                        return
+                        return spoke
 
-                    return  # waiting on the caller
+                    return spoke  # waiting on the caller
 
             async def resume_response(text: str):
                 """

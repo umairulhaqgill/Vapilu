@@ -1,6 +1,13 @@
-import type { FlowConfig } from "./types";
+import type { FlowConfig, TenantConfig } from "./types";
 
-const BASE = import.meta.env.VITE_TENANT_SERVICE_URL ?? "http://localhost:8004";
+// Falls back to whatever host the browser actually used to load this page
+// (window.location.hostname), not a hardcoded default - a LAN IP set in
+// .env drifts on every DHCP renewal (this broke once already), while
+// "reuse the address that got us here" is correct whether that's
+// localhost, 127.0.0.1, or a LAN IP, and never goes stale. Set
+// VITE_TENANT_SERVICE_URL explicitly only if the API genuinely lives on a
+// different host than this page does.
+const BASE = import.meta.env.VITE_TENANT_SERVICE_URL ?? `http://${window.location.hostname}:8004`;
 const TOKEN = import.meta.env.VITE_TENANT_SERVICE_TOKEN ?? "";
 
 export class ApiError extends Error {
@@ -38,6 +45,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listTenants: () => request<{ tenant_ids: string[] }>("/tenants"),
+
+  getTenant: (tenantId: string) => request<TenantConfig>(`/tenants/${encodeURIComponent(tenantId)}`),
+
+  saveTenant: (tenantId: string, config: TenantConfig) =>
+    request<TenantConfig>(`/tenants/${encodeURIComponent(tenantId)}`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
 
   listFlows: (tenantId: string, includeInactive = true) =>
     request<{ flows: FlowConfig[] }>(

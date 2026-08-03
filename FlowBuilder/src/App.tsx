@@ -3,12 +3,14 @@ import "./App.css";
 import TenantList from "./pages/TenantList";
 import FlowList from "./pages/FlowList";
 import FlowEditor from "./pages/FlowEditor";
+import TenantSettings from "./pages/TenantSettings";
 import CallTest from "./pages/CallTest";
 
 type FlowsView =
   | { screen: "tenants" }
   | { screen: "flows"; tenantId: string }
-  | { screen: "editor"; tenantId: string; flowId: string };
+  | { screen: "editor"; tenantId: string; flowId: string }
+  | { screen: "settings"; tenantId: string };
 
 type Tab = "flows" | "call-test";
 
@@ -42,6 +44,7 @@ export default function App() {
               <FlowList
                 tenantId={flowsView.tenantId}
                 onOpenFlow={(flowId) => setFlowsView({ screen: "editor", tenantId: flowsView.tenantId, flowId })}
+                onOpenSettings={() => setFlowsView({ screen: "settings", tenantId: flowsView.tenantId })}
                 onBack={() => setFlowsView({ screen: "tenants" })}
               />
             )}
@@ -49,6 +52,13 @@ export default function App() {
             {flowsView.screen === "editor" && (
               <FlowEditor
                 flowId={flowsView.flowId}
+                onBack={() => setFlowsView({ screen: "flows", tenantId: flowsView.tenantId })}
+              />
+            )}
+
+            {flowsView.screen === "settings" && (
+              <TenantSettings
+                tenantId={flowsView.tenantId}
                 onBack={() => setFlowsView({ screen: "flows", tenantId: flowsView.tenantId })}
               />
             )}

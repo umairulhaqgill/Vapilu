@@ -31,13 +31,16 @@ app = FastAPI(title="Tenant Config Service")
 
 # Only the Flow Builder (FlowBuilder/, a browser app) needs CORS - the
 # Orchestrator talks to this service server-to-server, where CORS doesn't
-# apply. Three origins because the browser can reach the same Vite dev
-# server three different ways depending on how it's addressed - localhost,
-# 127.0.0.1, and this machine's LAN IP (for another device on the network
-# to load it) - and CORS treats each as a genuinely different origin.
+# apply. A regex rather than a fixed origin list: the browser can reach
+# the same Vite dev server as localhost, 127.0.0.1, or this machine's LAN
+# IP (for another device on the network to load it) depending on how it's
+# addressed, and CORS treats each as a genuinely different origin - a
+# hardcoded LAN IP here already went stale once, on a DHCP renewal. This
+# is still local-network-only: the token check on every route is the real
+# access control, not this.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://192.168.1.171:5173"],
+    allow_origin_regex=r"^http://[\w.\-]+:5173$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
