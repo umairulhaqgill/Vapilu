@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(SHOT_DIR='C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad' node drive_drawer.mjs)"
+    ]
+  }
+}

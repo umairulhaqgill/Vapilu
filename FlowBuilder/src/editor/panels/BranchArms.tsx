@@ -54,11 +54,14 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
         const isFallback = arm.when.length === 0;
         return (
           <div key={i} className={`arm-row${isFallback ? " arm-fallback" : ""}`}>
-            <div className="field-row-line">
-              <strong>{isFallback ? "Fallback (always matches)" : `Arm ${i + 1}`}</strong>
-              <button type="button" className="danger" onClick={() => removeArm(i)}>
-                <Trash2 size={14} />
-                Remove arm
+            <div className="arm-row-header">
+              <span className={`arm-badge${isFallback ? " arm-badge-fallback" : ""}`}>
+                {isFallback ? "Fallback" : `Arm ${i + 1}`}
+              </span>
+              {isFallback && <span className="muted">always matches</span>}
+              <div className="spacer" />
+              <button type="button" className="danger icon-only" title="Remove arm" onClick={() => removeArm(i)}>
+                <Trash2 size={13} />
               </button>
             </div>
 
@@ -69,6 +72,15 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
                   <option value="all">all conditions</option>
                   <option value="any">any condition</option>
                 </select>
+              </div>
+            )}
+
+            {arm.when.length > 0 && (
+              <div className="condition-columns">
+                <span className="mini-label">Field</span>
+                <span className="mini-label">Operator</span>
+                <span className="mini-label">Value</span>
+                <span />
               </div>
             )}
 
@@ -85,7 +97,7 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
                     <option key={op} value={op}>{op}</option>
                   ))}
                 </select>
-                {c.op !== "exists" && c.op !== "not_exists" && (
+                {c.op !== "exists" && c.op !== "not_exists" ? (
                   <input
                     placeholder={c.op === "in" || c.op === "not_in" ? "comma,separated,values" : "value"}
                     value={
@@ -100,6 +112,8 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
                       }
                     }}
                   />
+                ) : (
+                  <span />
                 )}
                 <button
                   type="button"
@@ -117,7 +131,7 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
               condition
             </button>
 
-            <div className="field-row-line">
+            <div className="field-row-line arm-goto-row">
               <span className="muted">goto</span>
               <select value={arm.goto} onChange={(e) => updateArm(i, { goto: e.target.value })}>
                 <option value="">(choose target node)</option>

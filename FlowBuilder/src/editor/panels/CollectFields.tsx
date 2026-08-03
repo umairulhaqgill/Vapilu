@@ -31,9 +31,11 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
       {fields.length === 0 && <p className="muted">No fields yet.</p>}
 
       {fields.map((f, i) => (
-        <div key={i} className="field-row">
-          <div className="field-row-line">
+        <div key={i} className="field-card">
+          <div className="field-card-header">
+            <span className="field-card-index">{i + 1}</span>
             <input
+              className="field-name-input"
               placeholder="field name (e.g. phone)"
               value={f.name}
               onChange={(e) => update(i, { name: e.target.value })}
@@ -50,30 +52,37 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
               <Trash2 size={14} />
             </button>
           </div>
+
+          <label className="mini-label">Prompt (what to ask the caller for)</label>
           <input
-            placeholder="prompt - what to ask the caller for"
             value={f.prompt}
             onChange={(e) => update(i, { prompt: e.target.value })}
           />
+
           <div className="field-row-line">
-            <select
-              value={f.format ?? ""}
-              onChange={(e) => update(i, { format: (e.target.value || null) as FieldFormat | null })}
-            >
-              <option value="">no format check</option>
-              {FORMATS.map((fmt) => (
-                <option key={fmt} value={fmt}>{fmt}</option>
-              ))}
-            </select>
-            <input
-              placeholder="options, comma separated (optional)"
-              value={f.options?.join(", ") ?? ""}
-              onChange={(e) => {
-                const raw = e.target.value;
-                const options = raw.trim() ? raw.split(",").map((s) => s.trim()).filter(Boolean) : null;
-                update(i, { options });
-              }}
-            />
+            <div>
+              <label className="mini-label">Format</label>
+              <select
+                value={f.format ?? ""}
+                onChange={(e) => update(i, { format: (e.target.value || null) as FieldFormat | null })}
+              >
+                <option value="">no format check</option>
+                {FORMATS.map((fmt) => (
+                  <option key={fmt} value={fmt}>{fmt}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mini-label">Options (comma separated, optional)</label>
+              <input
+                value={f.options?.join(", ") ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const options = raw.trim() ? raw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+                  update(i, { options });
+                }}
+              />
+            </div>
           </div>
         </div>
       ))}

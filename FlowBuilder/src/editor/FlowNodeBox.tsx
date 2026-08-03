@@ -1,20 +1,12 @@
 import { Handle, Position, type NodeProps } from "reactflow";
 import type { Branch, FlowNode } from "../types";
+import { NODE_TYPE_META } from "./nodeTypeMeta";
 
 export interface FlowNodeBoxData {
   nodeId: string;
   node: FlowNode;
   isStart: boolean;
 }
-
-const TYPE_COLOR: Record<FlowNode["type"], string> = {
-  collect: "#2563eb",
-  say: "#059669",
-  action: "#d97706",
-  branch: "#7c3aed",
-  handoff: "#dc2626",
-  end: "#475569",
-};
 
 function summarizeBranch(b: Branch, i: number): string {
   if (b.when.length === 0) return "else (fallback)";
@@ -60,7 +52,7 @@ function bodyPreview(node: FlowNode): string {
 
 export default function FlowNodeBox({ data, selected }: NodeProps<FlowNodeBoxData>) {
   const { nodeId, node, isStart } = data;
-  const color = TYPE_COLOR[node.type];
+  const color = NODE_TYPE_META[node.type].color;
   const outputs = outputHandles(node);
   const handleCount = Math.max(outputs.length, 1);
 
