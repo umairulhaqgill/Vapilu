@@ -41,7 +41,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
 from call_state import CallSession, CallState
-from flow_engine import FlowRun, FlowStage, flow_menu, pick_flow
+from flow_engine import FlowRun, RunStatus, flow_menu, pick_flow
 from sentence_chunker import SentenceChunker
 
 load_dotenv()
@@ -477,7 +477,7 @@ async def handle_call(
                 extract_fields = None
                 run = session.active_flow
 
-                if run and run.stage == FlowStage.CONFIRMING:
+                if run and run.status == RunStatus.CONFIRMING:
                     # The caller is answering a yes/no confirmation. Decide
                     # from their words rather than asking the model again -
                     # this is cheap and avoids an extra round trip.
@@ -487,7 +487,7 @@ async def handle_call(
                     elif any(w in lowered for w in ("no", "wrong", "not", "change", "actually")):
                         run.confirm(False)
 
-                if run and run.stage != FlowStage.DONE:
+                if run and run.status not in (RunStatus.DONE, RunStatus.HANDOFF):
                     flow_instructions = run.instructions()
                     extract_fields = run.extraction_fields()
                 elif session.flows:
@@ -540,6 +540,7 @@ async def handle_call(
                         if details:
                             session.active_flow.apply_values(details)
                             session.active_flow.advance()
+                        await drive_flow(session.active_flow)
 
                 # --- Apply anything new the caller told us ---
                 elif session.active_flow and extracted:
@@ -552,46 +553,79 @@ async def handle_call(
                 # ("yes, that's right") carries no new field values, but is
                 # exactly the turn that moves a flow to READY. Gating this
                 # on extraction meant confirmed bookings never fired.
-                if session.active_flow and session.active_flow.stage != FlowStage.DONE:
+                if session.active_flow and session.active_flow.status != RunStatus.DONE:
                     session.active_flow.advance()
-                    logger.info("[%s] flow %s -> %s (have: %s)", conn_id,
+                    logger.info("[%s] flow %s at %s (%s) have: %s", conn_id,
                                 session.active_flow.flow_id,
-                                session.active_flow.stage.value,
+                                session.active_flow.current,
+                                session.active_flow.status.value,
                                 list(session.active_flow.values))
-
-                    if session.active_flow.stage == FlowStage.READY:
-                        await run_flow_action(session.active_flow)
+                    await drive_flow(session.active_flow)
 
                 await session.transition(CallState.LISTENING)
 
-            async def run_flow_action(run):
+            async def drive_flow(run):
                 """
-                Everything is collected and confirmed. The Connector Gateway
-                doesn't exist yet, so this logs what WOULD be called and
-                speaks the success line - the seam is here, ready for it.
+                Drains whatever the graph produced this turn: speaks `say`
+                nodes, runs `action` nodes, handles handoff. Loops because
+                one turn can pass through several non-interactive nodes
+                (action -> say -> say) before it needs the caller again.
                 """
-                action = run.flow.get("action")
-                logger.info("[%s] FLOW COMPLETE %s | action=%s | values=%s",
-                            conn_id, run.flow_id, action, run.values)
+                guard = 0
+                while True:
+                    guard += 1
+                    if guard > 10:
+                        logger.error("[%s] flow driver spun 10 times - stopping", conn_id)
+                        return
 
-                message = run.flow.get("on_success") or "All done."
-                for name, value in run.values.items():
-                    message = message.replace("{" + name + "}", str(value))
+                    text = run.take_pending_say()
+                    if text:
+                        clock = PlaybackClock(audio_format)
+                        await speak_text(tts_box["ws"], client_ws, text, clock)
+                        await clock.wait_until_finished()
+                        session.conversation_history.append({"role": "assistant", "content": text})
+                        run.continue_after_say()
+                        continue
 
-                await client_ws.send_text(json.dumps({
-                    "event": "flow_complete",
-                    "flow_id": run.flow_id,
-                    "values": run.values,
-                    "action": action,
-                }))
+                    if run.status == RunStatus.ACTING and run.pending_action:
+                        action = run.pending_action
+                        # Connector Gateway doesn't exist yet. This is the
+                        # seam: log what WOULD be called, tell the client,
+                        # and continue the graph as if it succeeded.
+                        logger.info("[%s] ACTION %s.%s values=%s", conn_id,
+                                    action["connector"], action["operation"], action["values"])
+                        await client_ws.send_text(json.dumps({
+                            "event": "flow_action",
+                            "flow_id": run.flow_id,
+                            "connector": action["connector"],
+                            "operation": action["operation"],
+                            "values": action["values"],
+                        }))
+                        run.action_completed({"status": "stubbed"}, ok=True)
+                        continue
 
-                clock = PlaybackClock(audio_format)
-                await speak_text(tts_box["ws"], client_ws, message, clock)
-                await clock.wait_until_finished()
+                    if run.status == RunStatus.HANDOFF:
+                        await client_ws.send_text(json.dumps({
+                            "event": "handoff",
+                            "flow_id": run.flow_id,
+                            "escalation_phone": (session.tenant or {}).get("escalation_phone"),
+                        }))
+                        logger.info("[%s] flow %s requested handoff", conn_id, run.flow_id)
+                        session.active_flow = None
+                        return
 
-                session.conversation_history.append({"role": "assistant", "content": message})
-                run.stage = FlowStage.DONE
-                session.active_flow = None
+                    if run.status == RunStatus.DONE:
+                        logger.info("[%s] flow %s complete, values=%s", conn_id,
+                                    run.flow_id, run.values)
+                        await client_ws.send_text(json.dumps({
+                            "event": "flow_complete",
+                            "flow_id": run.flow_id,
+                            "values": {k: v for k, v in run.values.items()},
+                        }))
+                        session.active_flow = None
+                        return
+
+                    return  # waiting on the caller
 
             async def resume_response(text: str):
                 """

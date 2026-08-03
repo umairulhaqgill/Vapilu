@@ -17,6 +17,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from flow_config import FlowConfig
 from tenant_config import TenantConfig
@@ -27,6 +28,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("tenant-config")
 
 app = FastAPI(title="Tenant Config Service")
+
+# Only the Flow Builder (FlowBuilder/, a browser app) needs CORS - the
+# Orchestrator talks to this service server-to-server, where CORS doesn't
+# apply. Vite's dev server binds both hostnames; browsers treat them as
+# different origins, so both are listed.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # TENANT_DB_URL decides the backend. Set it for MySQL/Postgres; leave it
 # unset to fall back to JSON files (no database needed).
@@ -105,11 +117,16 @@ async def delete_tenant(tenant_id: str, token: str | None = None):
 # --- Flows ---
 
 @app.get("/tenants/{tenant_id}/flows")
-async def list_flows(tenant_id: str, token: str | None = None):
-    """Active flows for a tenant. The Orchestrator calls this at call start."""
+async def list_flows(tenant_id: str, token: str | None = None, include_inactive: bool = False):
+    """
+    Flows for a tenant. Active only by default - that's what the
+    Orchestrator calls at the start of every call. Management UIs (the
+    flow builder) pass include_inactive=true to see and re-activate
+    disabled flows too.
+    """
     check_token(token)
     try:
-        flows = store.get_flows(tenant_id)
+        flows = store.get_flows(tenant_id, include_inactive=include_inactive)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"flows": [f.model_dump() for f in flows]}
@@ -135,6 +152,12 @@ async def upsert_flow(flow_id: str, flow: FlowConfig, token: str | None = None):
             status_code=400,
             detail=f"flow_id in URL ({flow_id!r}) doesn't match body ({flow.flow_id!r})",
         )
+    # Validate the graph before storing. A dangling goto or unreachable
+    # node otherwise only surfaces mid-call, which is the worst time.
+    problems = flow.validate_graph()
+    if problems:
+        raise HTTPException(status_code=400, detail={"graph_problems": problems})
+
     try:
         saved = store.save_flow(flow)
     except ValueError as e:

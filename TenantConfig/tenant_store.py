@@ -52,8 +52,11 @@ class TenantStore(ABC):
     # --- Flows ---
 
     @abstractmethod
-    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
-        """All ACTIVE flows for a tenant. Called at the start of every call."""
+    def get_flows(self, tenant_id: str, include_inactive: bool = False) -> list[FlowConfig]:
+        """Flows for a tenant. Active only by default; called at the start of
+        every call, where inactive flows must never be selectable. Pass
+        include_inactive=True for management UIs that need to see (and
+        re-activate) disabled flows too."""
 
     @abstractmethod
     def get_flow(self, flow_id: str) -> FlowConfig | None: ...
@@ -154,15 +157,13 @@ class SqlTenantStore(TenantStore):
         with self._Session() as session:
             return sorted(session.scalars(select(TenantRow.tenant_id)).all())
 
-    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
+    def get_flows(self, tenant_id: str, include_inactive: bool = False) -> list[FlowConfig]:
         self._validate_id(tenant_id)
         with self._Session() as session:
-            rows = session.scalars(
-                select(FlowRow).where(
-                    FlowRow.tenant_id == tenant_id,
-                    FlowRow.active.is_(True),
-                )
-            ).all()
+            conditions = [FlowRow.tenant_id == tenant_id]
+            if not include_inactive:
+                conditions.append(FlowRow.active.is_(True))
+            rows = session.scalars(select(FlowRow).where(*conditions)).all()
             return [FlowConfig(**row.config) for row in rows]
 
     def get_flow(self, flow_id: str) -> FlowConfig | None:
@@ -242,14 +243,17 @@ class JsonTenantStore(TenantStore):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
+    def get_flows(self, tenant_id: str, include_inactive: bool = False) -> list[FlowConfig]:
         self._validate_id(tenant_id)
         flows = []
         for path in self._flow_dir().glob("*.json"):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if data.get("tenant_id") == tenant_id and data.get("active", True):
-                flows.append(FlowConfig(**data))
+            if data.get("tenant_id") != tenant_id:
+                continue
+            if not include_inactive and not data.get("active", True):
+                continue
+            flows.append(FlowConfig(**data))
         return flows
 
     def get_flow(self, flow_id: str) -> FlowConfig | None:

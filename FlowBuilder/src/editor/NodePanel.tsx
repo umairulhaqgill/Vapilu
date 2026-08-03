@@ -1,0 +1,147 @@
+import { useState } from "react";
+import type { FlowConfig, FlowNode } from "../types";
+import { deleteNode, graphFields, patchNode, renameNode } from "./flowOps";
+import CollectFields from "./panels/CollectFields";
+import BranchArms from "./panels/BranchArms";
+
+interface Props {
+  flow: FlowConfig;
+  nodeId: string;
+  onChangeFlow: (next: FlowConfig) => void;
+  onSelectNode: (id: string | null) => void;
+}
+
+export default function NodePanel({ flow, nodeId, onChangeFlow, onSelectNode }: Props) {
+  const node = flow.nodes[nodeId];
+  const [draftId, setDraftId] = useState(nodeId);
+
+  if (!node) return null;
+
+  const patch = (p: Partial<FlowNode>) => onChangeFlow(patchNode(flow, nodeId, p));
+  const nodeIds = Object.keys(flow.nodes);
+  const knownFields = graphFields(flow);
+
+  const commitRename = () => {
+    const trimmed = draftId.trim();
+    if (!trimmed || trimmed === nodeId) {
+      setDraftId(nodeId);
+      return;
+    }
+    if (trimmed in flow.nodes) {
+      alert(`Node "${trimmed}" already exists.`);
+      setDraftId(nodeId);
+      return;
+    }
+    const next = renameNode(flow, nodeId, trimmed);
+    onChangeFlow(next);
+    onSelectNode(trimmed);
+  };
+
+  const remove = () => {
+    if (!confirm(`Delete node "${nodeId}"? References to it will be cleared, not rewritten.`)) return;
+    onChangeFlow(deleteNode(flow, nodeId));
+    onSelectNode(null);
+  };
+
+  return (
+    <div className="node-panel">
+      <div className="panel-section">
+        <label>Node ID</label>
+        <div className="field-row-line">
+          <input
+            value={draftId}
+            onChange={(e) => setDraftId(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          />
+        </div>
+        <div className="field-row-line">
+          <button
+            type="button"
+            disabled={flow.start === nodeId}
+            onClick={() => onChangeFlow({ ...flow, start: nodeId })}
+          >
+            {flow.start === nodeId ? "Is start node" : "Set as start"}
+          </button>
+          <button type="button" className="danger" onClick={remove}>Delete node</button>
+        </div>
+      </div>
+
+      {node.type === "collect" && (
+        <CollectFields
+          fields={node.fields}
+          confirm={node.confirm}
+          onChange={(fields) => patch({ fields })}
+          onChangeConfirm={(confirm) => patch({ confirm })}
+        />
+      )}
+
+      {(node.type === "collect" || node.type === "say") && (
+        <div className="panel-section">
+          <label>Next node</label>
+          <select value={node.next ?? ""} onChange={(e) => patch({ next: e.target.value || null })}>
+            <option value="">(none - dead end)</option>
+            {nodeIds.filter((id) => id !== nodeId).map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {node.type === "say" && (
+        <div className="panel-section">
+          <label>Text ({"{field}"} placeholders allowed)</label>
+          <textarea rows={3} value={node.text ?? ""} onChange={(e) => patch({ text: e.target.value })} />
+          {knownFields.length > 0 && (
+            <p className="muted">Known fields: {knownFields.map((f) => `{${f}}`).join(", ")}</p>
+          )}
+        </div>
+      )}
+
+      {node.type === "handoff" && (
+        <div className="panel-section">
+          <label>Text spoken before transferring</label>
+          <textarea rows={3} value={node.text ?? ""} onChange={(e) => patch({ text: e.target.value })} />
+        </div>
+      )}
+
+      {node.type === "action" && (
+        <div className="panel-section">
+          <label>Connector</label>
+          <input value={node.connector ?? ""} onChange={(e) => patch({ connector: e.target.value || null })} />
+          <label>Operation</label>
+          <input value={node.operation ?? ""} onChange={(e) => patch({ operation: e.target.value || null })} />
+          <label>Result key (where the result lands in collected values)</label>
+          <input value={node.result_key ?? ""} onChange={(e) => patch({ result_key: e.target.value || null })} />
+
+          <label>Next (on success)</label>
+          <select value={node.next ?? ""} onChange={(e) => patch({ next: e.target.value || null })}>
+            <option value="">(none - dead end)</option>
+            {nodeIds.filter((id) => id !== nodeId).map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+
+          <label>On error</label>
+          <select value={node.on_error ?? ""} onChange={(e) => patch({ on_error: e.target.value || null })}>
+            <option value="">(none - dead end)</option>
+            {nodeIds.filter((id) => id !== nodeId).map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {node.type === "branch" && (
+        <BranchArms
+          branches={node.branches}
+          nodeIds={nodeIds.filter((id) => id !== nodeId)}
+          knownFields={knownFields}
+          onChange={(branches) => patch({ branches })}
+        />
+      )}
+
+      {node.type === "end" && <p className="muted">Ends the flow. Nothing else to configure.</p>}
+    </div>
+  );
+}
