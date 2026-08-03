@@ -274,6 +274,13 @@ async def stream_nlu_reply(
                     yielded_anything = True
                     yield data
                 elif "extracted" in data:
+                    # A tool-call-only turn (no accompanying reply text) is
+                    # a real, valid response - not silence. Missing this
+                    # made the fallback message fire on a successful
+                    # extraction whenever the model chose not to also
+                    # narrate in words, which qwen3.5 does far more often
+                    # than the Claude models this was written against.
+                    yielded_anything = True
                     yield data
                 elif "error" in data:
                     logger.error("NLU Service reported an error mid-stream: %s", data["error"])
@@ -446,6 +453,20 @@ async def handle_call(
                     remainder = chunker.flush()
                     if remainder:
                         await speak_text(tts_box["ws"], client_ws, remainder, clock)
+
+                    if not full_reply.strip() and extracted_all:
+                        # The model recorded details via the tool call but
+                        # said nothing out loud. The system prompt tells it
+                        # not to do this, but smaller/local models don't
+                        # follow that reliably - and silence here reads as
+                        # "the call dropped" to a caller, who just repeats
+                        # themselves next. Always say SOMETHING.
+                        full_reply = "Got it, thanks."
+                        await client_ws.send_text(json.dumps({
+                            "event": "bot_speech_chunk",
+                            "text": full_reply,
+                        }))
+                        await speak_text(tts_box["ws"], client_ws, full_reply, clock)
 
                     # Stay alive until the caller has actually finished
                     # hearing everything, so barge-in still has something to
@@ -800,6 +821,14 @@ async def handle_call(
                         transcript = data.get("transcript")
                         if not transcript or not data.get("speech_final"):
                             continue  # only act once the caller has finished a full thought
+
+                        # Not used by the voice loop itself (the model gets
+                        # the transcript directly via respond_to below) -
+                        # this is purely so a client can display what STT
+                        # heard, which otherwise never leaves the server.
+                        await client_ws.send_text(json.dumps({
+                            "event": "caller_transcript", "text": transcript,
+                        }))
 
                         # A real new question - any pending resume is now
                         # moot, the caller has moved on.

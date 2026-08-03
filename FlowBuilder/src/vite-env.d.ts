@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   readonly VITE_TENANT_SERVICE_URL?: string;
   readonly VITE_TENANT_SERVICE_TOKEN?: string;
+  readonly VITE_ORCHESTRATOR_URL?: string;
+  readonly VITE_ORCHESTRATOR_TOKEN?: string;
 }
 
 interface ImportMeta {

@@ -53,6 +53,20 @@ Copy `.env.example` to `.env` and set `VITE_TENANT_SERVICE_TOKEN` to match
   flow that started in the old flat format gets normalized to a graph the
   first time it's edited here, rather than being written back as a
   half-flat/half-graph hybrid.
+- **Call Test** (`src/pages/CallTest.tsx` + `src/call/*`): a second tab
+  that connects to the Orchestrator's `ws://localhost:8001/ws/call`
+  directly from the browser and lets you talk to any tenant's bot without
+  the Python mic client. Plays the same role as
+  `Orchestrator/test_call_mic.py`, including the same client-first local
+  VAD barge-in (`src/call/vad.ts` is a line-for-line port of
+  `local_vad.py`) - the point being to exercise the real interruption
+  path, not a simplified one. Unlike the Python client it requests
+  `echoCancellation` via `getUserMedia`, so real acoustic AEC applies and
+  headphones aren't strictly required (see CLAUDE.md's "No echo
+  cancellation" note, which is about the Python client specifically).
+  `src/call/CallSession.ts` owns the WebSocket + mic + playback lifecycle
+  as a plain class, not a hook - it manages mutable audio objects that
+  don't belong in React state.
 
 ## Backend changes made alongside this
 
@@ -64,3 +78,15 @@ Copy `.env.example` to `.env` and set `VITE_TENANT_SERVICE_TOKEN` to match
   Orchestrator loads at call time.
 - CORS middleware on the Tenant Config Service, scoped to the Vite dev
   server's two origins - needed for any browser client, not just this one.
+- `caller_transcript` event added to the Orchestrator's `/ws/call`
+  WebSocket (`Orchestrator/orchestrator_service.py`) - the server already
+  knew what STT heard, but never sent it to the client. Purely additive;
+  existing clients (`test_call_mic.py`) ignore unknown events.
+
+## Call Test - requires the full pipeline
+
+Unlike the Flows tab (Tenant Config Service only), Call Test needs all
+four voice services up: STT (8000), Orchestrator (8001), NLU (8002), TTS
+(8003) - `..\run_all.ps1` from the project root starts all of them plus
+Tenant Config. Set `VITE_ORCHESTRATOR_TOKEN` in `.env` to match
+`ORCHESTRATOR_TOKEN` in `Orchestrator/.env`.

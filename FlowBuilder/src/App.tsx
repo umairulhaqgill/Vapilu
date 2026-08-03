@@ -3,41 +3,59 @@ import "./App.css";
 import TenantList from "./pages/TenantList";
 import FlowList from "./pages/FlowList";
 import FlowEditor from "./pages/FlowEditor";
+import CallTest from "./pages/CallTest";
 
-type View =
+type FlowsView =
   | { screen: "tenants" }
   | { screen: "flows"; tenantId: string }
   | { screen: "editor"; tenantId: string; flowId: string };
 
+type Tab = "flows" | "call-test";
+
 export default function App() {
-  const [view, setView] = useState<View>({ screen: "tenants" });
+  const [tab, setTab] = useState<Tab>("flows");
+  const [flowsView, setFlowsView] = useState<FlowsView>({ screen: "tenants" });
 
   return (
     <div className="app">
       <header className="app-header">
         <span className="brand">Vapilu Flow Builder</span>
+        <nav className="tab-nav">
+          <button type="button" className={tab === "flows" ? "tab-active" : ""} onClick={() => setTab("flows")}>
+            Flows
+          </button>
+          <button type="button" className={tab === "call-test" ? "tab-active" : ""} onClick={() => setTab("call-test")}>
+            Call Test
+          </button>
+        </nav>
         <span className="dev-tag">developer tool - super-admin only, not for tenant login</span>
       </header>
 
       <main className="app-main">
-        {view.screen === "tenants" && (
-          <TenantList onOpenTenant={(tenantId) => setView({ screen: "flows", tenantId })} />
+        {tab === "flows" && (
+          <>
+            {flowsView.screen === "tenants" && (
+              <TenantList onOpenTenant={(tenantId) => setFlowsView({ screen: "flows", tenantId })} />
+            )}
+
+            {flowsView.screen === "flows" && (
+              <FlowList
+                tenantId={flowsView.tenantId}
+                onOpenFlow={(flowId) => setFlowsView({ screen: "editor", tenantId: flowsView.tenantId, flowId })}
+                onBack={() => setFlowsView({ screen: "tenants" })}
+              />
+            )}
+
+            {flowsView.screen === "editor" && (
+              <FlowEditor
+                flowId={flowsView.flowId}
+                onBack={() => setFlowsView({ screen: "flows", tenantId: flowsView.tenantId })}
+              />
+            )}
+          </>
         )}
 
-        {view.screen === "flows" && (
-          <FlowList
-            tenantId={view.tenantId}
-            onOpenFlow={(flowId) => setView({ screen: "editor", tenantId: view.tenantId, flowId })}
-            onBack={() => setView({ screen: "tenants" })}
-          />
-        )}
-
-        {view.screen === "editor" && (
-          <FlowEditor
-            flowId={view.flowId}
-            onBack={() => setView({ screen: "flows", tenantId: view.tenantId })}
-          />
-        )}
+        {tab === "call-test" && <CallTest />}
       </main>
     </div>
   );

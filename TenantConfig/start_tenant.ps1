@@ -2,4 +2,4 @@
 Set-Location $PSScriptRoot
 Write-Host "Working directory: $(Get-Location)"
 venv\Scripts\Activate.ps1
-python -m uvicorn tenant_service:app --reload --port 8004
+python -m uvicorn tenant_service:app --reload --host 0.0.0.0 --port 8004
