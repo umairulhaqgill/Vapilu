@@ -184,6 +184,24 @@ class PlaybackClock:
             await asyncio.sleep(remaining)
 
 
+def _fallback_ack(run, extracted: dict) -> str:
+    """
+    Spoken filler for a turn where the model recorded details via tool
+    call but said nothing else (see the call site in speak_reply_text).
+
+    `run` still reflects state from BEFORE this turn's extraction is
+    applied - that happens later, in respond_to, after speak_reply_text
+    returns - so `extracted` (this turn's fresh values) is subtracted
+    separately rather than re-reading run.values, or this would just ask
+    for the field the caller already answered.
+    """
+    if run is not None:
+        for f in run.extraction_fields():
+            if f["name"] not in extracted:
+                return f"Got it. And {f['prompt']}?"
+    return "Got it, thanks."
+
+
 async def speak_text(tts_ws, client_ws, text: str, clock: "PlaybackClock"):
     """
     Sends one complete sentence to the (already open, persistent) TTS
@@ -460,8 +478,11 @@ async def handle_call(
                         # not to do this, but smaller/local models don't
                         # follow that reliably - and silence here reads as
                         # "the call dropped" to a caller, who just repeats
-                        # themselves next. Always say SOMETHING.
-                        full_reply = "Got it, thanks."
+                        # themselves next. Always say SOMETHING - and if a
+                        # flow is running, ask for whatever's still needed
+                        # instead of a dead-end "thanks", so the caller
+                        # doesn't have to prompt again just to keep going.
+                        full_reply = _fallback_ack(session.active_flow, extracted_all)
                         await client_ws.send_text(json.dumps({
                             "event": "bot_speech_chunk",
                             "text": full_reply,
