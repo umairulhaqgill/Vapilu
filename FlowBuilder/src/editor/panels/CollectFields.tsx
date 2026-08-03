@@ -1,3 +1,4 @@
+import { Plus, Trash2 } from "lucide-react";
 import type { FieldFormat, FlowField } from "../../types";
 
 const FORMATS: FieldFormat[] = ["phone", "email", "number", "date"];
@@ -21,7 +22,10 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
     <div className="panel-section">
       <div className="panel-section-header">
         <h4>Fields to collect</h4>
-        <button type="button" onClick={add}>+ Add field</button>
+        <button type="button" onClick={add}>
+          <Plus size={14} />
+          Add field
+        </button>
       </div>
 
       {fields.length === 0 && <p className="muted">No fields yet.</p>}
@@ -42,7 +46,9 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
               />
               required
             </label>
-            <button type="button" className="danger" onClick={() => remove(i)}>Remove</button>
+            <button type="button" className="danger icon-only" title="Remove field" onClick={() => remove(i)}>
+              <Trash2 size={14} />
+            </button>
           </div>
           <input
             placeholder="prompt - what to ask the caller for"

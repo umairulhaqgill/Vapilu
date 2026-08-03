@@ -126,9 +126,9 @@ export default function Canvas({ flow, selectedNodeId, onSelectNode, onChangeFlo
       fitView
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="#334155" />
+      <Background color="var(--border)" />
       <Controls />
-      <MiniMap pannable zoomable style={{ background: "#0f172a" }} />
+      <MiniMap pannable zoomable style={{ background: "var(--bg)" }} />
     </ReactFlow>
   );
 }
@@ -142,8 +142,8 @@ function edgeFor(source: string, sourceHandle: string, target: string, label?: s
     targetHandle: "in",
     label,
     style: color ? { stroke: color } : undefined,
-    labelStyle: { fill: "#e2e8f0", fontSize: 10 },
-    labelBgStyle: { fill: "#1e293b" },
+    labelStyle: { fill: "var(--text)", fontSize: 10 },
+    labelBgStyle: { fill: "var(--bg-elevated)" },
     labelBgPadding: [4, 2],
     markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "#64748b" },
   };

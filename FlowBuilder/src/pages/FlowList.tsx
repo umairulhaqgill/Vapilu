@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
+import { CircleCheck, CircleSlash, Plus, Trash2, X } from "lucide-react";
 import { api, ApiError } from "../api";
 import type { FlowConfig } from "../types";
 
 interface Props {
   tenantId: string;
   onOpenFlow: (flowId: string) => void;
-  onOpenSettings: () => void;
-  onBack: () => void;
 }
 
-export default function FlowList({ tenantId, onOpenFlow, onOpenSettings, onBack }: Props) {
+export default function FlowList({ tenantId, onOpenFlow }: Props) {
   const [flows, setFlows] = useState<FlowConfig[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -78,10 +77,7 @@ export default function FlowList({ tenantId, onOpenFlow, onOpenSettings, onBack 
   return (
     <div className="page">
       <div className="page-header">
-        <button type="button" onClick={onBack}>&larr; Tenants</button>
-        <h2>{tenantId}</h2>
-        <div className="spacer" />
-        <button type="button" onClick={onOpenSettings}>Settings</button>
+        <h2>Flows</h2>
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -108,11 +104,13 @@ export default function FlowList({ tenantId, onOpenFlow, onOpenSettings, onBack 
                 <td className="muted">{f.trigger}</td>
                 <td>
                   <button type="button" disabled={busy} onClick={() => toggleActive(f)}>
+                    {f.active ? <CircleCheck size={14} /> : <CircleSlash size={14} />}
                     {f.active ? "Active" : "Inactive"}
                   </button>
                 </td>
                 <td>
                   <button type="button" className="danger" disabled={busy} onClick={() => remove(f)}>
+                    <Trash2 size={14} />
                     Delete
                   </button>
                 </td>
@@ -129,15 +127,22 @@ export default function FlowList({ tenantId, onOpenFlow, onOpenSettings, onBack 
 
       <div className="panel-section">
         {!creating ? (
-          <button type="button" onClick={() => setCreating(true)}>+ New flow</button>
+          <button type="button" className="primary" onClick={() => setCreating(true)}>
+            <Plus size={14} />
+            New flow
+          </button>
         ) : (
           <div className="field-row-line">
             <input placeholder="flow_id (e.g. book_appointment)" value={newId} onChange={(e) => setNewId(e.target.value)} />
             <input placeholder="trigger - when this flow applies" value={newTrigger} onChange={(e) => setNewTrigger(e.target.value)} />
-            <button type="button" disabled={busy || !newId.trim() || !newTrigger.trim()} onClick={createFlow}>
+            <button type="button" className="primary" disabled={busy || !newId.trim() || !newTrigger.trim()} onClick={createFlow}>
+              <CircleCheck size={14} />
               Create
             </button>
-            <button type="button" onClick={() => setCreating(false)}>Cancel</button>
+            <button type="button" onClick={() => setCreating(false)}>
+              <X size={14} />
+              Cancel
+            </button>
           </div>
         )}
       </div>

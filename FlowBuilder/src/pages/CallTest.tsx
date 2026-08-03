@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Phone, PhoneOff, RotateCcw } from "lucide-react";
 import { api, ApiError } from "../api";
 import { CallSession, type CallLogEntry, type CallStatus } from "../call/CallSession";
 
@@ -87,9 +88,15 @@ export default function CallTest() {
 
         <div className="field-row-line" style={{ marginTop: 10 }}>
           {!isLive ? (
-            <button type="button" onClick={() => void startCall()}>Start call</button>
+            <button type="button" className="primary" onClick={() => void startCall()}>
+              <Phone size={14} />
+              Start call
+            </button>
           ) : (
-            <button type="button" className="danger" onClick={endCall}>End call</button>
+            <button type="button" className="danger" onClick={endCall}>
+              <PhoneOff size={14} />
+              End call
+            </button>
           )}
           <span className={`status-pill status-${status}`}>{status}</span>
         </div>
@@ -105,12 +112,13 @@ export default function CallTest() {
           {" - "}
           <a
             href="#"
-            className="link-button"
+            className="link-button inline-icon"
             onClick={(e) => {
               e.preventDefault();
               setThreshold(DEFAULT_VAD_THRESHOLD);
             }}
           >
+            <RotateCcw size={11} />
             reset
           </a>
         </label>

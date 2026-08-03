@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Flag, Trash2 } from "lucide-react";
 import type { FlowConfig, FlowNode } from "../types";
 import { deleteNode, graphFields, patchNode, renameNode } from "./flowOps";
 import CollectFields from "./panels/CollectFields";
@@ -61,9 +62,13 @@ export default function NodePanel({ flow, nodeId, onChangeFlow, onSelectNode }: 
             disabled={flow.start === nodeId}
             onClick={() => onChangeFlow({ ...flow, start: nodeId })}
           >
+            <Flag size={14} />
             {flow.start === nodeId ? "Is start node" : "Set as start"}
           </button>
-          <button type="button" className="danger" onClick={remove}>Delete node</button>
+          <button type="button" className="danger" onClick={remove}>
+            <Trash2 size={14} />
+            Delete node
+          </button>
         </div>
       </div>
 

@@ -69,17 +69,17 @@ export default function FlowNodeBox({ data, selected }: NodeProps<FlowNodeBoxDat
       style={{
         width: 240,
         borderRadius: 8,
-        borderTop: selected ? `2px solid ${color}` : "1px solid #334155",
-        borderRight: selected ? `2px solid ${color}` : "1px solid #334155",
-        borderBottom: selected ? `2px solid ${color}` : "1px solid #334155",
+        borderTop: selected ? `2px solid ${color}` : "1px solid var(--border)",
+        borderRight: selected ? `2px solid ${color}` : "1px solid var(--border)",
+        borderBottom: selected ? `2px solid ${color}` : "1px solid var(--border)",
         borderLeft: `6px solid ${color}`,
-        background: "#1e293b",
-        color: "#e2e8f0",
-        boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.25)" : "0 1px 2px rgba(0,0,0,0.4)",
+        background: "var(--bg-elevated)",
+        color: "var(--text)",
+        boxShadow: selected ? "0 0 0 3px var(--accent-soft)" : "0 1px 2px rgba(0,0,0,0.15)",
         fontSize: 12,
       }}
     >
-      <Handle type="target" position={Position.Left} id="in" style={{ background: "#94a3b8" }} />
+      <Handle type="target" position={Position.Left} id="in" style={{ background: "var(--text-muted)" }} />
 
       <div
         style={{
@@ -87,7 +87,7 @@ export default function FlowNodeBox({ data, selected }: NodeProps<FlowNodeBoxDat
           justifyContent: "space-between",
           alignItems: "center",
           padding: "6px 10px",
-          borderBottom: "1px solid #334155",
+          borderBottom: "1px solid var(--border)",
           fontWeight: 600,
         }}
       >
@@ -100,7 +100,7 @@ export default function FlowNodeBox({ data, selected }: NodeProps<FlowNodeBoxDat
       </div>
       <div style={{ padding: "8px 10px" }}>
         <div style={{ fontWeight: 600, marginBottom: 4 }}>{nodeId}</div>
-        <div style={{ color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {bodyPreview(node)}
         </div>
       </div>

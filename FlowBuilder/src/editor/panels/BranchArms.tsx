@@ -1,3 +1,4 @@
+import { Plus, Trash2, X } from "lucide-react";
 import type { Branch, Condition, ConditionOp } from "../../types";
 
 const OPS: ConditionOp[] = ["eq", "ne", "in", "not_in", "exists", "not_exists", "contains"];
@@ -37,7 +38,10 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
     <div className="panel-section">
       <div className="panel-section-header">
         <h4>Branch arms (evaluated in order)</h4>
-        <button type="button" onClick={addArm}>+ Add arm</button>
+        <button type="button" onClick={addArm}>
+          <Plus size={14} />
+          Add arm
+        </button>
       </div>
 
       <datalist id="known-fields">
@@ -52,7 +56,10 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
           <div key={i} className={`arm-row${isFallback ? " arm-fallback" : ""}`}>
             <div className="field-row-line">
               <strong>{isFallback ? "Fallback (always matches)" : `Arm ${i + 1}`}</strong>
-              <button type="button" className="danger" onClick={() => removeArm(i)}>Remove arm</button>
+              <button type="button" className="danger" onClick={() => removeArm(i)}>
+                <Trash2 size={14} />
+                Remove arm
+              </button>
             </div>
 
             {!isFallback && (
@@ -94,11 +101,21 @@ export default function BranchArms({ branches, nodeIds, knownFields, onChange }:
                     }}
                   />
                 )}
-                <button type="button" className="danger" onClick={() => removeCondition(i, ci)}>x</button>
+                <button
+                  type="button"
+                  className="danger icon-only"
+                  title="Remove condition"
+                  onClick={() => removeCondition(i, ci)}
+                >
+                  <X size={14} />
+                </button>
               </div>
             ))}
 
-            <button type="button" className="link-button" onClick={() => addCondition(i)}>+ condition</button>
+            <button type="button" className="link-button" onClick={() => addCondition(i)}>
+              <Plus size={12} />
+              condition
+            </button>
 
             <div className="field-row-line">
               <span className="muted">goto</span>

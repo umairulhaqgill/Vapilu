@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Save } from "lucide-react";
 import { api, ApiError } from "../api";
 import type { BusinessHours, TenantConfig } from "../types";
 
@@ -8,14 +9,13 @@ const DAYS: (keyof BusinessHours)[] = [
 
 interface Props {
   tenantId: string;
-  onBack: () => void;
 }
 
 function splitList(raw: string): string[] {
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-export default function TenantSettings({ tenantId, onBack }: Props) {
+export default function TenantSettings({ tenantId }: Props) {
   const [config, setConfig] = useState<TenantConfig | null>(null);
   const [savedJson, setSavedJson] = useState("");
   const [loading, setLoading] = useState(true);
@@ -66,11 +66,11 @@ export default function TenantSettings({ tenantId, onBack }: Props) {
   return (
     <div className="page">
       <div className="page-header">
-        <button type="button" onClick={onBack}>&larr; Flows</button>
-        <h2>{tenantId} - Settings</h2>
+        <h2>Settings</h2>
         <div className="spacer" />
         {dirty && <span className="dirty-dot" title="Unsaved changes" />}
-        <button type="button" onClick={() => void save()} disabled={saving}>
+        <button type="button" className="primary" onClick={() => void save()} disabled={saving}>
+          <Save size={14} />
           {saving ? "Saving..." : "Save"}
         </button>
       </div>

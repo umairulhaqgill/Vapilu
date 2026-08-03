@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Save } from "lucide-react";
 import { api, ApiError } from "../api";
 import type { FlowConfig, NodeType } from "../types";
 import Canvas from "../editor/Canvas";
@@ -10,10 +11,9 @@ import { addNode } from "../editor/flowOps";
 
 interface Props {
   flowId: string;
-  onBack: () => void;
 }
 
-export default function FlowEditor({ flowId, onBack }: Props) {
+export default function FlowEditor({ flowId }: Props) {
   const [flow, setFlow] = useState<FlowConfig | null>(null);
   const [savedJson, setSavedJson] = useState<string>("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -85,12 +85,12 @@ export default function FlowEditor({ flowId, onBack }: Props) {
   return (
     <div className="editor-layout">
       <div className="editor-toolbar">
-        <button type="button" onClick={onBack}>&larr; Back to flows</button>
         <h2>{flow.flow_id}</h2>
         <span className="muted">{flow.trigger}</span>
         <div className="spacer" />
         {dirty && <span className="dirty-dot" title="Unsaved changes" />}
-        <button type="button" onClick={handleSave} disabled={saving || clientProblems.length > 0}>
+        <button type="button" className="primary" onClick={handleSave} disabled={saving || clientProblems.length > 0}>
+          <Save size={14} />
           {saving ? "Saving..." : "Save"}
         </button>
       </div>
