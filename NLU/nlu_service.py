@@ -54,6 +54,9 @@ class ReplyRequest(BaseModel):
     # extra instructions, capabilities, hours). This service stays stateless
     # - it never looks tenants up itself, it just uses what it's handed.
     tenant_context: dict | None = None
+    # Flow steering: what the flow engine wants collected this turn.
+    flow_instructions: str | None = None
+    extract_fields: list[dict] | None = None
 
 
 @app.get("/health")
@@ -99,8 +102,13 @@ async def reply_stream(request: ReplyRequest):
 
     async def generate():
         try:
-            async for delta in nlu.get_reply_stream(history, request.tenant_context):
-                yield json.dumps({"delta": delta}) + "\n"
+            async for item in nlu.get_reply_stream(
+                history,
+                request.tenant_context,
+                request.flow_instructions,
+                request.extract_fields,
+            ):
+                yield json.dumps(item) + "\n"
             yield json.dumps({"done": True}) + "\n"
         except Exception as e:
             logger.exception("NLU streaming reply failed: %s", e)

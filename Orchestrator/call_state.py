@@ -43,6 +43,11 @@ class CallSession:
         # None means no tenant was specified or lookup failed - the
         # Orchestrator falls back to generic defaults in that case.
         self.tenant: dict | None = None
+        # Flows this tenant has defined, loaded once at call start.
+        self.flows: list[dict] = []
+        # The flow currently in progress, if any. A FlowRun instance -
+        # typed loosely here to keep call_state free of engine imports.
+        self.active_flow = None
 
     async def transition(self, new_state: CallState):
         logger.info("[%s] state: %s -> %s", self.conn_id, self.state, new_state)

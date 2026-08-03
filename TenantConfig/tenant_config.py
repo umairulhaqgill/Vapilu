@@ -4,10 +4,6 @@ Tenant configuration schema.
 This is the contract for what a business can customize about its bot
 without anyone touching code. Everything here was previously a hardcoded
 literal somewhere in the Orchestrator or NLU service.
-
-Adding a new setting: add it here with a sensible default, and it becomes
-optional for existing tenants automatically - their stored configs won't
-have the field, and pydantic fills the default in.
 """
 
 from pydantic import BaseModel, Field

@@ -18,6 +18,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
+from flow_config import FlowConfig
 from tenant_config import TenantConfig
 from tenant_store import create_store
 
@@ -99,3 +100,57 @@ async def delete_tenant(tenant_id: str, token: str | None = None):
         raise HTTPException(status_code=404, detail=f"No tenant with id {tenant_id!r}")
     logger.info("Deleted tenant %s", tenant_id)
     return {"deleted": tenant_id}
+
+
+# --- Flows ---
+
+@app.get("/tenants/{tenant_id}/flows")
+async def list_flows(tenant_id: str, token: str | None = None):
+    """Active flows for a tenant. The Orchestrator calls this at call start."""
+    check_token(token)
+    try:
+        flows = store.get_flows(tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"flows": [f.model_dump() for f in flows]}
+
+
+@app.get("/flows/{flow_id}")
+async def get_flow(flow_id: str, token: str | None = None):
+    check_token(token)
+    try:
+        flow = store.get_flow(flow_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if flow is None:
+        raise HTTPException(status_code=404, detail=f"No flow with id {flow_id!r}")
+    return flow.model_dump()
+
+
+@app.put("/flows/{flow_id}")
+async def upsert_flow(flow_id: str, flow: FlowConfig, token: str | None = None):
+    check_token(token)
+    if flow.flow_id != flow_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"flow_id in URL ({flow_id!r}) doesn't match body ({flow.flow_id!r})",
+        )
+    try:
+        saved = store.save_flow(flow)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("Saved flow %s for tenant %s", flow_id, flow.tenant_id)
+    return saved.model_dump()
+
+
+@app.delete("/flows/{flow_id}")
+async def delete_flow(flow_id: str, token: str | None = None):
+    check_token(token)
+    try:
+        deleted = store.delete_flow(flow_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No flow with id {flow_id!r}")
+    logger.info("Deleted flow %s", flow_id)
+    return {"deleted": flow_id}

@@ -20,6 +20,7 @@ or API shape is behind it. Everything else calls NluClient.get_reply() and
 never needs to know OpenRouter is involved at all.
 """
 
+import json
 import os
 from typing import AsyncIterator
 
@@ -126,31 +127,100 @@ class NluClient:
         )
         return response.choices[0].message.content or ""
 
-    async def get_reply_stream(self, conversation_history: list[dict], tenant_context: dict | None = None) -> AsyncIterator[str]:
+    async def get_reply_stream(
+        self,
+        conversation_history: list[dict],
+        tenant_context: dict | None = None,
+        flow_instructions: str | None = None,
+        extract_fields: list[dict] | None = None,
+    ):
         """
-        Same as get_reply, but yields the reply as it's generated instead of
-        waiting for the whole thing. This is what makes the bot feel
-        responsive instead of pausing for its entire answer before saying
-        anything - critical once TTS exists, since it lets speech start on
-        the first sentence while later sentences are still being generated.
+        Streams the reply, and - when extract_fields is given - also reports
+        which of those fields the caller just supplied.
 
-        Yields plain text deltas (small chunks of new text, not the
-        cumulative text so far) - the caller is responsible for
-        accumulating them if it needs the full reply at the end.
+        Yields dicts rather than plain strings:
+          {"delta": "..."}      a chunk of reply text
+          {"extracted": {...}}  field values the caller gave this turn
+
+        Why one call instead of two: extraction and replying could be
+        separate LLM calls, but that would double the latency on the
+        critical path of every turn. Tool calling lets the model do both in
+        one pass - it reports what it heard AND answers naturally.
+
+        Tool call arguments arrive as fragments across many chunks and have
+        to be reassembled by index before they can be parsed - that's what
+        the tool_buffers bookkeeping below is doing.
         """
-        messages = [{"role": "system", "content": self._build_system_prompt(tenant_context)}] + conversation_history
+        system_prompt = self._build_system_prompt(tenant_context)
+        if flow_instructions:
+            system_prompt += "\n\n" + flow_instructions
 
-        stream = await self._async_client.chat.completions.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=messages,
-            stream=True,
-            extra_headers={
+        messages = [{"role": "system", "content": system_prompt}] + conversation_history
+
+        kwargs = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": messages,
+            "stream": True,
+            "extra_headers": {
                 "HTTP-Referer": "https://github.com/",
                 "X-Title": "Voice Bot NLU Service",
             },
-        )
+        }
+
+        if extract_fields:
+            properties = {}
+            for f in extract_fields:
+                spec = {"type": "string", "description": f.get("prompt", f["name"])}
+                if f.get("options"):
+                    spec["enum"] = f["options"]
+                properties[f["name"]] = spec
+
+            kwargs["tools"] = [{
+                "type": "function",
+                "function": {
+                    "name": "record_details",
+                    "description": (
+                        "Record details the caller just provided. Call this whenever "
+                        "the caller gives any of these details, including several at "
+                        "once. Only include fields they actually stated - never guess "
+                        "or fill in placeholder values."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                    },
+                },
+            }]
+
+        stream = await self._async_client.chat.completions.create(**kwargs)
+
+        tool_buffers: dict[int, str] = {}
+
         async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                yield {"delta": delta.content}
+
+            for call in (delta.tool_calls or []):
+                # Arguments arrive in fragments keyed by index - concatenate
+                # until the stream ends, then parse once.
+                tool_buffers[call.index] = tool_buffers.get(call.index, "")
+                if call.function and call.function.arguments:
+                    tool_buffers[call.index] += call.function.arguments
+
+        for raw in tool_buffers.values():
+            if not raw.strip():
+                continue
+            try:
+                extracted = json.loads(raw)
+            except json.JSONDecodeError:
+                # A truncated or malformed tool call means we didn't hear a
+                # usable value. Better to drop it and re-ask than to record
+                # something wrong into a real booking.
+                continue
+            if isinstance(extracted, dict) and extracted:
+                yield {"extracted": extracted}

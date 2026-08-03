@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tenant storage.
 
 Two interchangeable backends behind one interface:
@@ -12,7 +12,7 @@ Two interchangeable backends behind one interface:
 
 Which one you get is decided by TENANT_DB_URL (see create_store at the
 bottom). Everything above this file - the service, the Orchestrator - only
-ever sees the TenantStore interface and has no idea which is in use.
+sees the TenantStore interface and has no idea which is in use.
 
 Schema note: the config is stored as a single JSON column rather than one
 column per setting. That's deliberate. Adding a new field to
@@ -27,9 +27,10 @@ import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from sqlalchemy import JSON, String, create_engine, select
+from sqlalchemy import JSON, Boolean, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
+from flow_config import FlowConfig
 from tenant_config import TenantConfig
 
 
@@ -47,6 +48,21 @@ class TenantStore(ABC):
 
     @abstractmethod
     def list_ids(self) -> list[str]: ...
+
+    # --- Flows ---
+
+    @abstractmethod
+    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
+        """All ACTIVE flows for a tenant. Called at the start of every call."""
+
+    @abstractmethod
+    def get_flow(self, flow_id: str) -> FlowConfig | None: ...
+
+    @abstractmethod
+    def save_flow(self, flow: FlowConfig) -> FlowConfig: ...
+
+    @abstractmethod
+    def delete_flow(self, flow_id: str) -> bool: ...
 
     @staticmethod
     def _validate_id(tenant_id: str):
@@ -80,6 +96,18 @@ class TenantRow(Base):
 
     # SQLAlchemy's JSON type maps to the right native type per database -
     # JSON on MySQL, JSONB-capable JSON on Postgres, TEXT on SQLite.
+    config: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class FlowRow(Base):
+    __tablename__ = "flows"
+
+    flow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Indexed separately from the JSON blob because "all flows for tenant X"
+    # runs on every single call - that one has to be a real query, not a
+    # scan of JSON documents.
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     config: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -126,6 +154,53 @@ class SqlTenantStore(TenantStore):
         with self._Session() as session:
             return sorted(session.scalars(select(TenantRow.tenant_id)).all())
 
+    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
+        self._validate_id(tenant_id)
+        with self._Session() as session:
+            rows = session.scalars(
+                select(FlowRow).where(
+                    FlowRow.tenant_id == tenant_id,
+                    FlowRow.active.is_(True),
+                )
+            ).all()
+            return [FlowConfig(**row.config) for row in rows]
+
+    def get_flow(self, flow_id: str) -> FlowConfig | None:
+        self._validate_id(flow_id)
+        with self._Session() as session:
+            row = session.get(FlowRow, flow_id)
+            return FlowConfig(**row.config) if row else None
+
+    def save_flow(self, flow: FlowConfig) -> FlowConfig:
+        self._validate_id(flow.flow_id)
+        self._validate_id(flow.tenant_id)
+        with self._Session() as session:
+            row = session.get(FlowRow, flow.flow_id)
+            if row is None:
+                row = FlowRow(
+                    flow_id=flow.flow_id,
+                    tenant_id=flow.tenant_id,
+                    active=flow.active,
+                    config=flow.model_dump(),
+                )
+                session.add(row)
+            else:
+                row.tenant_id = flow.tenant_id
+                row.active = flow.active
+                row.config = flow.model_dump()
+            session.commit()
+        return flow
+
+    def delete_flow(self, flow_id: str) -> bool:
+        self._validate_id(flow_id)
+        with self._Session() as session:
+            row = session.get(FlowRow, flow_id)
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
 
 # --------------------------------------------------------------------------
 # JSON file backend
@@ -161,6 +236,44 @@ class JsonTenantStore(TenantStore):
 
     def list_ids(self) -> list[str]:
         return sorted(p.stem for p in self._dir.glob("*.json"))
+
+    def _flow_dir(self) -> Path:
+        d = self._dir / "flows"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def get_flows(self, tenant_id: str) -> list[FlowConfig]:
+        self._validate_id(tenant_id)
+        flows = []
+        for path in self._flow_dir().glob("*.json"):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("tenant_id") == tenant_id and data.get("active", True):
+                flows.append(FlowConfig(**data))
+        return flows
+
+    def get_flow(self, flow_id: str) -> FlowConfig | None:
+        self._validate_id(flow_id)
+        path = self._flow_dir() / f"{flow_id}.json"
+        if not path.exists():
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return FlowConfig(**json.load(f))
+
+    def save_flow(self, flow: FlowConfig) -> FlowConfig:
+        self._validate_id(flow.flow_id)
+        self._validate_id(flow.tenant_id)
+        with open(self._flow_dir() / f"{flow.flow_id}.json", "w", encoding="utf-8") as f:
+            json.dump(flow.model_dump(), f, indent=2)
+        return flow
+
+    def delete_flow(self, flow_id: str) -> bool:
+        self._validate_id(flow_id)
+        path = self._flow_dir() / f"{flow_id}.json"
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
 
 
 # --------------------------------------------------------------------------

@@ -41,6 +41,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
 from call_state import CallSession, CallState
+from flow_engine import FlowRun, FlowStage, flow_menu, pick_flow
 from sentence_chunker import SentenceChunker
 
 load_dotenv()
@@ -112,6 +113,26 @@ async def load_tenant(tenant_id: str | None) -> dict | None:
     except Exception as e:
         logger.exception("Failed to load tenant %r: %s", tenant_id, e)
         return None
+
+
+async def load_flows(tenant_id: str | None) -> list[dict]:
+    """
+    Fetches a tenant's active flows at call start. Failure returns an empty
+    list rather than raising - the bot degrades to plain conversation
+    instead of the call failing outright.
+    """
+    if not tenant_id:
+        return []
+    try:
+        response = await http_client.get(
+            f"{TENANT_SERVICE_URL}/tenants/{tenant_id}/flows",
+            params={"token": TENANT_SERVICE_TOKEN},
+        )
+        response.raise_for_status()
+        return response.json().get("flows", [])
+    except Exception as e:
+        logger.exception("Failed to load flows for %r: %s", tenant_id, e)
+        return []
 
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN")
 if not ORCHESTRATOR_TOKEN:
@@ -203,7 +224,12 @@ async def speak_text(tts_ws, client_ws, text: str, clock: "PlaybackClock"):
         logger.exception("TTS Service call failed: %s", e)
 
 
-async def stream_nlu_reply(conversation_history: list[dict], tenant: dict | None = None):
+async def stream_nlu_reply(
+    conversation_history: list[dict],
+    tenant: dict | None = None,
+    flow_instructions: str | None = None,
+    extract_fields: list[dict] | None = None,
+):
     """
     Calls the NLU/LLM Service's streaming endpoint and yields text deltas as
     they arrive - this is what lets the Orchestrator react to the first few
@@ -219,6 +245,10 @@ async def stream_nlu_reply(conversation_history: list[dict], tenant: dict | None
     just because one downstream service hiccuped.
     """
     payload = {"token": NLU_SERVICE_TOKEN, "conversation_history": conversation_history}
+    if flow_instructions:
+        payload["flow_instructions"] = flow_instructions
+    if extract_fields:
+        payload["extract_fields"] = extract_fields
     if tenant:
         payload["tenant_context"] = {
             "business_name": tenant.get("business_name"),
@@ -242,7 +272,9 @@ async def stream_nlu_reply(conversation_history: list[dict], tenant: dict | None
                 data = json.loads(line)
                 if "delta" in data:
                     yielded_anything = True
-                    yield data["delta"]
+                    yield data
+                elif "extracted" in data:
+                    yield data
                 elif "error" in data:
                     logger.error("NLU Service reported an error mid-stream: %s", data["error"])
                     break
@@ -250,7 +282,7 @@ async def stream_nlu_reply(conversation_history: list[dict], tenant: dict | None
         logger.exception("NLU Service call failed: %s", e)
 
     if not yielded_anything:
-        yield "Sorry, I'm having trouble understanding right now. Could you say that again?"
+        yield {"delta": "Sorry, I'm having trouble understanding right now. Could you say that again?"}
 
 
 @app.get("/health")
@@ -276,6 +308,10 @@ async def handle_call(
     await client_ws.accept()
     session = CallSession(conn_id)
     session.tenant = await load_tenant(tenant_id)
+    session.flows = await load_flows(tenant_id)
+    if session.flows:
+        logger.info("[%s] loaded %d flow(s): %s", conn_id, len(session.flows),
+                    ", ".join(f.get("flow_id", "?") for f in session.flows))
     if session.tenant:
         logger.info(
             "[%s] call started for tenant %s (%s)",
@@ -388,10 +424,17 @@ async def handle_call(
                 cancelled call never reaches its return statement at all.
                 """
                 full_reply = ""
+                extracted_all: dict = {}
                 chunker = SentenceChunker()
                 clock = PlaybackClock(audio_format)
                 try:
-                    async for delta in full_text_source:
+                    async for event in full_text_source:
+                        if "extracted" in event:
+                            extracted_all.update(event["extracted"])
+                            continue
+                        delta = event.get("delta", "")
+                        if not delta:
+                            continue
                         full_reply += delta
                         await client_ws.send_text(json.dumps({
                             "event": "bot_speech_chunk",
@@ -409,7 +452,7 @@ async def handle_call(
                     # cancel during playback.
                     await clock.wait_until_finished()
 
-                    return full_reply
+                    return full_reply, extracted_all
                 except asyncio.CancelledError:
                     if full_reply.strip():
                         session.pending_resume_text = full_reply
@@ -426,10 +469,52 @@ async def handle_call(
                 await session.transition(CallState.THINKING)
                 logger.info("[%s] caller said: %s", conn_id, transcript)
 
+                # --- Flow steering ---
+                # If a flow is running, tell the LLM exactly what's still
+                # needed and give it a tool to report what it heard. If none
+                # is running, offer the menu so it can start one.
+                flow_instructions = None
+                extract_fields = None
+                run = session.active_flow
+
+                if run and run.stage == FlowStage.CONFIRMING:
+                    # The caller is answering a yes/no confirmation. Decide
+                    # from their words rather than asking the model again -
+                    # this is cheap and avoids an extra round trip.
+                    lowered = transcript.lower()
+                    if any(w in lowered for w in ("yes", "yeah", "correct", "right", "confirm", "that's it")):
+                        run.confirm(True)
+                    elif any(w in lowered for w in ("no", "wrong", "not", "change", "actually")):
+                        run.confirm(False)
+
+                if run and run.stage != FlowStage.DONE:
+                    flow_instructions = run.instructions()
+                    extract_fields = run.extraction_fields()
+                elif session.flows:
+                    # No flow running. Offer the menu, and give the model a
+                    # field to report which one the caller is asking for -
+                    # reusing the same extraction mechanism rather than
+                    # adding a second one.
+                    flow_instructions = (
+                        flow_menu(session.flows)
+                        + "\n\nIf the caller is asking for one of these, record its id in "
+                          "_start_flow. If they're just chatting or asking a question, leave it empty."
+                    )
+                    extract_fields = [{
+                        "name": "_start_flow",
+                        "prompt": "the id of the task the caller wants, if any",
+                        "options": [f.get("flow_id") for f in session.flows if f.get("flow_id")],
+                    }]
+
                 await session.transition(CallState.RESPONDING)
                 try:
-                    full_reply = await speak_reply_text(
-                        stream_nlu_reply(session.conversation_history, session.tenant)
+                    full_reply, extracted = await speak_reply_text(
+                        stream_nlu_reply(
+                            session.conversation_history,
+                            session.tenant,
+                            flow_instructions,
+                            extract_fields,
+                        )
                     )
                 except asyncio.CancelledError:
                     # Caller talked over the bot. speak_reply_text has
@@ -441,7 +526,72 @@ async def handle_call(
 
                 await client_ws.send_text(json.dumps({"event": "bot_speech_end"}))
                 session.conversation_history.append({"role": "assistant", "content": full_reply})
+
+                # --- Start a flow if the caller asked for one ---
+                if not session.active_flow and extracted.get("_start_flow"):
+                    chosen = pick_flow(session.flows, extracted["_start_flow"])
+                    if chosen:
+                        session.active_flow = FlowRun(chosen)
+                        session.active_flow.advance()
+                        logger.info("[%s] started flow %s", conn_id, chosen.get("flow_id"))
+                        # The caller may have given details in the same
+                        # breath ("book me in, it's Omar") - don't waste them.
+                        details = {k: v for k, v in extracted.items() if k != "_start_flow"}
+                        if details:
+                            session.active_flow.apply_values(details)
+                            session.active_flow.advance()
+
+                # --- Apply anything new the caller told us ---
+                elif session.active_flow and extracted:
+                    rejected = session.active_flow.apply_values(extracted)
+                    if rejected:
+                        logger.info("[%s] flow rejected values: %s", conn_id, rejected)
+
+                # --- Recompute stage and act. Deliberately OUTSIDE the
+                # "did we extract anything" branch: a confirmation turn
+                # ("yes, that's right") carries no new field values, but is
+                # exactly the turn that moves a flow to READY. Gating this
+                # on extraction meant confirmed bookings never fired.
+                if session.active_flow and session.active_flow.stage != FlowStage.DONE:
+                    session.active_flow.advance()
+                    logger.info("[%s] flow %s -> %s (have: %s)", conn_id,
+                                session.active_flow.flow_id,
+                                session.active_flow.stage.value,
+                                list(session.active_flow.values))
+
+                    if session.active_flow.stage == FlowStage.READY:
+                        await run_flow_action(session.active_flow)
+
                 await session.transition(CallState.LISTENING)
+
+            async def run_flow_action(run):
+                """
+                Everything is collected and confirmed. The Connector Gateway
+                doesn't exist yet, so this logs what WOULD be called and
+                speaks the success line - the seam is here, ready for it.
+                """
+                action = run.flow.get("action")
+                logger.info("[%s] FLOW COMPLETE %s | action=%s | values=%s",
+                            conn_id, run.flow_id, action, run.values)
+
+                message = run.flow.get("on_success") or "All done."
+                for name, value in run.values.items():
+                    message = message.replace("{" + name + "}", str(value))
+
+                await client_ws.send_text(json.dumps({
+                    "event": "flow_complete",
+                    "flow_id": run.flow_id,
+                    "values": run.values,
+                    "action": action,
+                }))
+
+                clock = PlaybackClock(audio_format)
+                await speak_text(tts_box["ws"], client_ws, message, clock)
+                await clock.wait_until_finished()
+
+                session.conversation_history.append({"role": "assistant", "content": message})
+                run.stage = FlowStage.DONE
+                session.active_flow = None
 
             async def resume_response(text: str):
                 """
@@ -463,7 +613,7 @@ async def handle_call(
                     yield text
 
                 try:
-                    full_reply = await speak_reply_text(single_chunk_source())
+                    full_reply, _ = await speak_reply_text(single_chunk_source())
                 except asyncio.CancelledError:
                     logger.info("[%s] resumed response interrupted again", conn_id)
                     raise
