@@ -106,6 +106,22 @@ Field extraction uses LLM tool calling in the same streaming call as the
 reply (one round trip, not two). Tool call arguments arrive as fragments
 that must be reassembled by index - see `nlu_client.get_reply_stream`.
 
+**Entities - "which branch/doctor/session?"** A `collect` field can name an
+`entity_type` (e.g. `"branch"`) instead of a hardcoded `options` list; its
+choices come from the tenant's `entities` (Tenant Config, managed via the
+Flow Builder's Entities tab) and stay current as the tenant adds or renames
+one - `orchestrator_service.inject_entity_options` fills `options` in per
+call, so `flow_engine.py` never learns entities exist at all, it just sees
+an ordinary enum field. Once the caller picks one,
+`orchestrator_service.stamp_entity_ids` resolves the spoken label (or an
+alias) to the entity's stable id and stores it as `_{field}_id` - e.g.
+`_branch_id` - underscore-prefixed so it never leaks into a spoken
+`{field}` placeholder or the LLM's "already collected" summary. An action
+node can name one of these fields via `entity_field` so the Connector
+Gateway looks up settings scoped to that specific entity (its own calendar
+ID) rather than the tenant as a whole - see
+`ConnectorGateway/README.md`'s "Per-tenant connector settings" section.
+
 Graphs are validated on save (`validate_graph`): dangling gotos, unreachable
 nodes, branches with no arms, actions missing a connector. Legacy flat flows
 (a `collect` list plus an `action`) auto-convert to graphs on load.

@@ -110,30 +110,36 @@ async def connectors(token: str | None = None):
 
 
 @app.get("/connectors/{connector_id}/tenants/{tenant_id}/config")
-async def get_connector_config(connector_id: str, tenant_id: str, token: str | None = None):
+async def get_connector_config(connector_id: str, tenant_id: str, entity_id: str | None = None, token: str | None = None):
+    """entity_id omitted (or None) reads the tenant-wide default config.
+    Pass it to read one entity's own settings instead (a specific branch's
+    calendar id) - see connector_config_store.py."""
     check_token(token)
     try:
-        return {"config": store.get(tenant_id, connector_id)}
+        return {"config": store.get(tenant_id, connector_id, entity_id)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.put("/connectors/{connector_id}/tenants/{tenant_id}/config")
-async def save_connector_config(connector_id: str, tenant_id: str, body: ConfigBody, token: str | None = None):
+async def save_connector_config(
+    connector_id: str, tenant_id: str, body: ConfigBody, entity_id: str | None = None, token: str | None = None,
+):
     check_token(token)
     try:
-        saved = store.save(tenant_id, connector_id, body.config)
+        saved = store.save(tenant_id, connector_id, body.config, entity_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    logger.info("Saved %s config for tenant %s", connector_id, tenant_id)
+    logger.info("Saved %s config for tenant %s%s", connector_id, tenant_id,
+                f" entity {entity_id}" if entity_id else "")
     return {"config": saved}
 
 
 @app.delete("/connectors/{connector_id}/tenants/{tenant_id}/config")
-async def delete_connector_config(connector_id: str, tenant_id: str, token: str | None = None):
+async def delete_connector_config(connector_id: str, tenant_id: str, entity_id: str | None = None, token: str | None = None):
     check_token(token)
     try:
-        deleted = store.delete(tenant_id, connector_id)
+        deleted = store.delete(tenant_id, connector_id, entity_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not deleted:
@@ -160,9 +166,17 @@ async def call(request: CallRequest):
 
     values = dict(request.values)
     tenant_id = values.get("_tenant_id")
+    entity_id = values.get("_entity_id")
     if tenant_id:
         try:
-            values["_config"] = store.get(tenant_id, request.connector)
+            config = store.get(tenant_id, request.connector)
+            # Entity-scoped settings (this one branch's calendar id)
+            # override the tenant-wide defaults (a shared API key) rather
+            # than replace them outright, so a tenant doesn't have to
+            # repeat every shared setting on every entity.
+            if entity_id:
+                config = {**config, **store.get(tenant_id, request.connector, entity_id)}
+            values["_config"] = config
         except ValueError:
             values["_config"] = {}
     else:

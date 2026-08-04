@@ -75,6 +75,30 @@ PUT    /connectors/{connector_id}/tenants/{tenant_id}/config?token=...   body: {
 DELETE /connectors/{connector_id}/tenants/{tenant_id}/config?token=...
 ```
 
+### Per-entity settings
+
+Some tenants have more than one of the thing a connector books against - a
+clinic with several doctors, a shop with several branches - and each one
+needs its own resource id (its own calendar). That's the same config
+storage with one more key: pass `?entity_id=...` on any of the three
+endpoints above to read/write that one entity's own row instead of the
+tenant-wide default, stored in a separate `connector_entity_configs`
+table/file (see `connector_config_store.py`) so tenants who never adopt
+entities are unaffected.
+
+At call time, if the Orchestrator's flow marked an action node with
+`entity_field` (see CLAUDE.md's "Entities" section) and the caller already
+picked one, `values["_entity_id"]` arrives set. `/call` then merges the
+matching entity's row **over** the tenant-wide default - so a shared API
+key set once at the tenant level doesn't have to be repeated on every
+branch, only what's actually different (the calendar id) needs its own
+entry.
+
+The entities themselves (their id, label, and type - "branch", "doctor")
+live in Tenant Config, not here (see `TenantConfig.entities`) - they're
+business-facing content the caller hears spoken back, not a credential.
+This store only holds each one's *connector-technical* settings.
+
 ## Why its own service
 
 Split out from the Orchestrator (rather than a module inside it) so a

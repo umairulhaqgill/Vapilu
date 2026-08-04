@@ -37,6 +37,15 @@ class FlowField(BaseModel):
 
     options: list[str] | None = None
 
+    # When set, valid answers come from the tenant's entities of this type
+    # (see TenantConfig.entities) instead of being authored here - e.g.
+    # "branch" means "whichever branches this tenant currently has", kept
+    # in sync automatically as the tenant adds or renames one. The
+    # Orchestrator resolves this into `options` per call, before the flow
+    # ever reaches this schema's engine - see
+    # `orchestrator_service.inject_entity_options`.
+    entity_type: str | None = None
+
 
 class Condition(BaseModel):
     """
@@ -119,6 +128,13 @@ class FlowNode(BaseModel):
     # nodes and conditions can use it.
     result_key: str | None = None
     on_error: str | None = None
+    # Name of a `collect` field (elsewhere in this flow) whose entity_type
+    # picked a specific resource - "branch" if this action should run
+    # against whichever branch the caller chose. Lets the Connector Gateway
+    # look up settings scoped to that one entity (its calendar id) rather
+    # than one config per tenant. None means this action isn't scoped to
+    # a particular entity.
+    entity_field: str | None = None
 
     branches: list[Branch] = Field(default_factory=list)
 

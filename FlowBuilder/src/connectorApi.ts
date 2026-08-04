@@ -38,24 +38,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// entityId omitted (or undefined) reads/writes the tenant-wide default
+// config. Pass it to scope to one entity (a specific branch's calendar id)
+// instead - see ConnectorGateway/connector_config_store.py.
+function configPath(connectorId: string, tenantId: string, entityId?: string): string {
+  const path = `/connectors/${encodeURIComponent(connectorId)}/tenants/${encodeURIComponent(tenantId)}/config`;
+  return entityId ? `${path}?entity_id=${encodeURIComponent(entityId)}` : path;
+}
+
 export const connectorApi = {
   // connector_id -> operation names, e.g. {"booking": ["cancel_booking", "check_availability", "create_booking"]}
   listConnectors: () => request<Record<string, string[]>>("/connectors"),
 
-  getConfig: (connectorId: string, tenantId: string) =>
-    request<{ config: Record<string, unknown> }>(
-      `/connectors/${encodeURIComponent(connectorId)}/tenants/${encodeURIComponent(tenantId)}/config`
-    ),
+  getConfig: (connectorId: string, tenantId: string, entityId?: string) =>
+    request<{ config: Record<string, unknown> }>(configPath(connectorId, tenantId, entityId)),
 
-  saveConfig: (connectorId: string, tenantId: string, config: Record<string, unknown>) =>
-    request<{ config: Record<string, unknown> }>(
-      `/connectors/${encodeURIComponent(connectorId)}/tenants/${encodeURIComponent(tenantId)}/config`,
-      { method: "PUT", body: JSON.stringify({ config }) }
-    ),
+  saveConfig: (connectorId: string, tenantId: string, config: Record<string, unknown>, entityId?: string) =>
+    request<{ config: Record<string, unknown> }>(configPath(connectorId, tenantId, entityId), {
+      method: "PUT",
+      body: JSON.stringify({ config }),
+    }),
 
-  deleteConfig: (connectorId: string, tenantId: string) =>
-    request<{ deleted: boolean }>(
-      `/connectors/${encodeURIComponent(connectorId)}/tenants/${encodeURIComponent(tenantId)}/config`,
-      { method: "DELETE" }
-    ),
+  deleteConfig: (connectorId: string, tenantId: string, entityId?: string) =>
+    request<{ deleted: boolean }>(configPath(connectorId, tenantId, entityId), { method: "DELETE" }),
 };

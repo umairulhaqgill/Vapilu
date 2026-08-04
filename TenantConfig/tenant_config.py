@@ -25,6 +25,27 @@ class BusinessHours(BaseModel):
     timezone: str = "UTC"
 
 
+class Entity(BaseModel):
+    """
+    One selectable resource under a tenant - a branch, a doctor, a class
+    session. Lets a flow ask "which one?" without hardcoding the answer
+    list in the flow graph, and lets a connector look up settings scoped
+    to the specific one the caller picked (e.g. one calendar per branch)
+    instead of one config per tenant.
+
+    `type` groups entities a `collect` field can offer as choices (see
+    `FlowField.entity_type` in flow_config.py) - e.g. every entity with
+    type "branch" becomes the enum for a "which branch?" field.
+    """
+    id: str
+    type: str
+    label: str
+    # Alternate phrasings the caller might use ("the DHA one", "downtown")
+    # that should still resolve to this entity. Not offered to the model
+    # as separate enum values - matched against on top of the label.
+    aliases: list[str] = Field(default_factory=list)
+
+
 class TenantConfig(BaseModel):
     tenant_id: str
     business_name: str
@@ -55,6 +76,10 @@ class TenantConfig(BaseModel):
     # Which connectors this tenant has enabled, e.g. ["booking", "orders"].
     # The Connector Gateway will use this to decide what tools to expose.
     enabled_connectors: list[str] = Field(default_factory=list)
+
+    # Selectable resources a flow can offer the caller (branches, doctors,
+    # class sessions, ...) - see Entity's docstring.
+    entities: list[Entity] = Field(default_factory=list)
 
     # --- Status ---
     active: bool = True

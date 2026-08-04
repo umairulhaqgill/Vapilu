@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import FlowList from "./pages/FlowList";
 import FlowEditor from "./pages/FlowEditor";
 import TenantSettings from "./pages/TenantSettings";
+import TenantEntities from "./pages/TenantEntities";
 import TenantConnectors from "./pages/TenantConnectors";
 import CallTest from "./pages/CallTest";
 
@@ -16,6 +17,7 @@ type View =
   | { screen: "flows"; tenantId: string }
   | { screen: "editor"; tenantId: string; flowId: string }
   | { screen: "settings"; tenantId: string }
+  | { screen: "entities"; tenantId: string }
   | { screen: "connectors"; tenantId: string }
   | { screen: "call-test" };
 
@@ -51,6 +53,7 @@ export default function App() {
   const goDashboard = () => setView({ screen: "dashboard" });
   const goFlows = (tenantId: string) => setView({ screen: "flows", tenantId });
   const goSettings = (tenantId: string) => setView({ screen: "settings", tenantId });
+  const goEntities = (tenantId: string) => setView({ screen: "entities", tenantId });
   const goConnectors = (tenantId: string) => setView({ screen: "connectors", tenantId });
   const goCallTest = () => setView({ screen: "call-test" });
 
@@ -60,9 +63,11 @@ export default function App() {
       ? "flows"
       : view.screen === "settings"
         ? "settings"
-        : view.screen === "connectors"
-          ? "connectors"
-          : null;
+        : view.screen === "entities"
+          ? "entities"
+          : view.screen === "connectors"
+            ? "connectors"
+            : null;
 
   let crumbs: Crumb[] = [];
   if (view.screen === "dashboard") {
@@ -77,6 +82,8 @@ export default function App() {
     ];
   } else if (view.screen === "settings") {
     crumbs = [{ label: view.tenantId, onClick: () => goFlows(view.tenantId) }, { label: "Settings" }];
+  } else if (view.screen === "entities") {
+    crumbs = [{ label: view.tenantId, onClick: () => goFlows(view.tenantId) }, { label: "Entities" }];
   } else if (view.screen === "connectors") {
     crumbs = [{ label: view.tenantId, onClick: () => goFlows(view.tenantId) }, { label: "Connectors" }];
   } else if (view.screen === "call-test") {
@@ -92,7 +99,13 @@ export default function App() {
         callTestActive={view.screen === "call-test"}
         onSelectDashboard={goDashboard}
         onSelectSection={(tenantId, section) =>
-          section === "flows" ? goFlows(tenantId) : section === "settings" ? goSettings(tenantId) : goConnectors(tenantId)
+          section === "flows"
+            ? goFlows(tenantId)
+            : section === "settings"
+              ? goSettings(tenantId)
+              : section === "entities"
+                ? goEntities(tenantId)
+                : goConnectors(tenantId)
         }
         onSelectCallTest={goCallTest}
         onLogout={logout}
@@ -118,6 +131,8 @@ export default function App() {
           {view.screen === "editor" && <FlowEditor flowId={view.flowId} />}
 
           {view.screen === "settings" && <TenantSettings tenantId={view.tenantId} />}
+
+          {view.screen === "entities" && <TenantEntities tenantId={view.tenantId} />}
 
           {view.screen === "connectors" && <TenantConnectors tenantId={view.tenantId} />}
 

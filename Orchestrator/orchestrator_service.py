@@ -167,6 +167,63 @@ async def load_flows(tenant_id: str | None) -> list[dict]:
         logger.exception("Failed to load flows for %r: %s", tenant_id, e)
         return []
 
+def inject_entity_options(flow: dict, tenant: dict | None) -> dict:
+    """
+    Fills in `options` for any collect field with an `entity_type` (see
+    FlowField.entity_type), from the tenant's current `entities` list -
+    so "which branch?" always offers whatever branches this tenant has
+    right now, without the flow graph hardcoding a list that goes stale
+    the moment a business adds one.
+
+    Mutates and returns `flow` in place. flow_engine.py never learns about
+    entities at all - by the time it sees these fields, `options` is
+    already populated and it's indistinguishable from a field the flow
+    author typed the choices into directly.
+    """
+    entities = (tenant or {}).get("entities") or []
+    for node in (flow.get("nodes") or {}).values():
+        for field in (node.get("fields") or []):
+            entity_type = field.get("entity_type")
+            if entity_type:
+                field["options"] = [e["label"] for e in entities if e.get("type") == entity_type]
+    return flow
+
+
+def stamp_entity_ids(run: "FlowRun", tenant: dict | None):
+    """
+    After the caller picks a value for an entity-typed field, records the
+    matching entity's stable id under `_{field}_id` in run.values.
+
+    Underscore-prefixed so it's excluded from the "already collected"
+    prompt summary (see FlowRun.instructions) and can never leak into a
+    spoken {field} placeholder - the caller hears the label ("DHA
+    branch"), a connector reads the id. Matches against label OR any
+    alias, case-insensitively, so "the downtown one" still resolves if
+    that's a configured alias.
+    """
+    entities = (tenant or {}).get("entities") or []
+    for node in run.nodes.values():
+        for field in (node.get("fields") or []):
+            entity_type = field.get("entity_type")
+            name = field.get("name")
+            if not entity_type or name not in run.values:
+                continue
+            spoken = str(run.values[name]).strip().lower()
+            match = next(
+                (
+                    e for e in entities
+                    if e.get("type") == entity_type
+                    and (
+                        e.get("label", "").strip().lower() == spoken
+                        or spoken in [a.strip().lower() for a in e.get("aliases") or []]
+                    )
+                ),
+                None,
+            )
+            if match:
+                run.values[f"_{name}_id"] = match["id"]
+
+
 ORCHESTRATOR_TOKEN = os.environ.get("ORCHESTRATOR_TOKEN")
 if not ORCHESTRATOR_TOKEN:
     logger.warning(
@@ -620,7 +677,7 @@ async def handle_call(
                 if not session.active_flow and extracted.get("_start_flow"):
                     chosen = pick_flow(session.flows, extracted["_start_flow"])
                     if chosen:
-                        session.active_flow = FlowRun(chosen)
+                        session.active_flow = FlowRun(inject_entity_options(chosen, session.tenant))
                         session.active_flow.advance()
                         logger.info("[%s] started flow %s", conn_id, chosen.get("flow_id"))
                         # The caller may have given details in the same
@@ -628,12 +685,14 @@ async def handle_call(
                         details = {k: v for k, v in extracted.items() if k != "_start_flow"}
                         if details:
                             session.active_flow.apply_values(details)
+                            stamp_entity_ids(session.active_flow, session.tenant)
                             session.active_flow.advance()
                         spoke_anything = await drive_flow(session.active_flow) or spoke_anything
 
                 # --- Apply anything new the caller told us ---
                 elif session.active_flow and extracted:
                     rejected = session.active_flow.apply_values(extracted)
+                    stamp_entity_ids(session.active_flow, session.tenant)
                     if rejected:
                         logger.info("[%s] flow rejected values: %s", conn_id, rejected)
 
@@ -713,6 +772,19 @@ async def handle_call(
                         # in run.values, so they can never leak into a
                         # spoken {field} placeholder in a say/confirm node.
                         call_values = {**action["values"], "_tenant_id": tenant_id, "_flow_id": run.flow_id}
+                        # entity_field names which collected field (e.g.
+                        # "branch") picked the specific resource this
+                        # action runs against - stamp_entity_ids already
+                        # resolved that choice to a stable id. Only the
+                        # flow author knows which of possibly several
+                        # entity-typed fields is the one that matters for
+                        # THIS action, so it's declared per action node
+                        # rather than guessed by the Gateway.
+                        entity_field = (run.node or {}).get("entity_field")
+                        if entity_field:
+                            entity_id = run.values.get(f"_{entity_field}_id")
+                            if entity_id:
+                                call_values["_entity_id"] = entity_id
                         ok, result = await call_connector(action["connector"], action["operation"], call_values)
                         logger.info("[%s] ACTION %s.%s ok=%s result=%s", conn_id,
                                     action["connector"], action["operation"], ok, result)

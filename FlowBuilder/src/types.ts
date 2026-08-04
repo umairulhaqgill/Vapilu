@@ -23,6 +23,11 @@ export interface FlowField {
   required: boolean;
   format?: FieldFormat | null;
   options?: string[] | null;
+  // When set, valid answers come from the tenant's entities of this type
+  // (see Entity below) instead of the static `options` list - the
+  // Orchestrator fills `options` in per call from whatever entities
+  // currently exist.
+  entity_type?: string | null;
 }
 
 export type NodeType = "collect" | "say" | "action" | "branch" | "handoff" | "end";
@@ -41,6 +46,11 @@ export interface FlowNode {
   operation?: string | null;
   result_key?: string | null;
   on_error?: string | null;
+  // Action nodes only: name of a collect field (elsewhere in the flow)
+  // whose entity_type picked the specific resource this action runs
+  // against, e.g. "branch". Lets the connector look up settings scoped to
+  // that one entity instead of the tenant as a whole.
+  entity_field?: string | null;
   branches: Branch[];
   next?: string | null;
   ui?: NodeUi | null;
@@ -76,6 +86,13 @@ export interface BusinessHours {
   timezone: string;
 }
 
+export interface Entity {
+  id: string;
+  type: string;
+  label: string;
+  aliases: string[];
+}
+
 export interface TenantConfig {
   tenant_id: string;
   business_name: string;
@@ -87,6 +104,7 @@ export interface TenantConfig {
   escalation_phone?: string | null;
   capabilities: string[];
   enabled_connectors: string[];
+  entities: Entity[];
   active: boolean;
 }
 
@@ -100,6 +118,7 @@ export function emptyNode(type: NodeType): FlowNode {
     operation: null,
     result_key: null,
     on_error: null,
+    entity_field: null,
     branches: type === "branch" ? [{ when: [], match: "all", goto: "" }] : [],
     next: null,
     ui: null,

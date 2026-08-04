@@ -16,7 +16,7 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
   };
   const remove = (i: number) => onChange(fields.filter((_, idx) => idx !== i));
   const add = () =>
-    onChange([...fields, { name: "", prompt: "", required: true, format: null, options: null }]);
+    onChange([...fields, { name: "", prompt: "", required: true, format: null, options: null, entity_type: null }]);
 
   return (
     <div className="panel-section">
@@ -75,6 +75,8 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
             <div>
               <label className="mini-label">Options (comma separated, optional)</label>
               <input
+                disabled={!!f.entity_type}
+                placeholder={f.entity_type ? "set by entity type below" : ""}
                 value={f.options?.join(", ") ?? ""}
                 onChange={(e) => {
                   const raw = e.target.value;
@@ -83,7 +85,24 @@ export default function CollectFields({ fields, confirm, onChange, onChangeConfi
                 }}
               />
             </div>
+            <div>
+              <label className="mini-label">Entity type (dynamic options, optional)</label>
+              <input
+                placeholder="e.g. branch"
+                value={f.entity_type ?? ""}
+                onChange={(e) => {
+                  const entity_type = e.target.value || null;
+                  update(i, { entity_type, ...(entity_type ? { options: null } : {}) });
+                }}
+              />
+            </div>
           </div>
+          {f.entity_type && (
+            <p className="muted" style={{ marginTop: 4 }}>
+              Choices come from this tenant's "{f.entity_type}" entities (Entities tab) each call, instead of a
+              fixed list.
+            </p>
+          )}
         </div>
       ))}
 

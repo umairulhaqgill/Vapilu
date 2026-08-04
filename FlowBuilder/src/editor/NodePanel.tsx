@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Flag, Trash2 } from "lucide-react";
 import type { FlowConfig, FlowNode } from "../types";
-import { deleteNode, graphFields, patchNode, renameNode } from "./flowOps";
+import { deleteNode, entityFieldNames, graphFields, patchNode, renameNode } from "./flowOps";
 import { NODE_TYPE_META } from "./nodeTypeMeta";
 import CollectFields from "./panels/CollectFields";
 import BranchArms from "./panels/BranchArms";
@@ -127,6 +127,20 @@ export default function NodePanel({ flow, nodeId, onChangeFlow, onSelectNode }: 
 
           <label className="mini-label">Result key (where the result lands in collected values)</label>
           <input value={node.result_key ?? ""} onChange={(e) => patch({ result_key: e.target.value || null })} />
+
+          <label className="mini-label">Entity field (optional - which collected field selects the resource this runs against)</label>
+          <select value={node.entity_field ?? ""} onChange={(e) => patch({ entity_field: e.target.value || null })}>
+            <option value="">(none - tenant-wide)</option>
+            {entityFieldNames(flow).map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {entityFieldNames(flow).length === 0 && (
+            <p className="muted">
+              No collect fields have an entity type set yet - add one (e.g. "branch") in a collect node to scope
+              this action to a specific entity's connector settings.
+            </p>
+          )}
 
           <div className="field-row-line" style={{ marginTop: 10 }}>
             <div>

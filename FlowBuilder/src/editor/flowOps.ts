@@ -99,3 +99,14 @@ export function graphFields(flow: FlowConfig): string[] {
   }
   return Array.from(names).sort();
 }
+
+// Names of collect fields with an entity_type set - candidates for an
+// action node's `entity_field` (see FlowNode.entity_field), which of them
+// picks the specific resource that action runs against.
+export function entityFieldNames(flow: FlowConfig): string[] {
+  const names = new Set<string>();
+  for (const node of Object.values(flow.nodes)) {
+    for (const f of node.fields) if (f.name && f.entity_type) names.add(f.name);
+  }
+  return Array.from(names).sort();
+}

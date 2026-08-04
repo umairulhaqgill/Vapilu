@@ -307,8 +307,13 @@ class FlowRun:
         lines = [f"You are helping the caller with: {self.flow.get('trigger', 'their request')}."]
 
         if self.values:
+            # Underscore-prefixed keys (e.g. _branch_id, stamped by
+            # stamp_entity_ids in the Orchestrator) are resolved ids for
+            # connectors, not something the caller said or should hear
+            # echoed back - exclude them from what the model sees as
+            # "collected".
             summary = ", ".join(f"{k}: {v}" for k, v in self.values.items()
-                                if not isinstance(v, dict))
+                                if not isinstance(v, dict) and not k.startswith("_"))
             if summary:
                 lines.append(f"Already collected - do NOT ask again: {summary}.")
 
