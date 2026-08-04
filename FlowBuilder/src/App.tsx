@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import FlowList from "./pages/FlowList";
 import FlowEditor from "./pages/FlowEditor";
 import TenantSettings from "./pages/TenantSettings";
+import TenantConnectors from "./pages/TenantConnectors";
 import CallTest from "./pages/CallTest";
 
 type View =
@@ -15,6 +16,7 @@ type View =
   | { screen: "flows"; tenantId: string }
   | { screen: "editor"; tenantId: string; flowId: string }
   | { screen: "settings"; tenantId: string }
+  | { screen: "connectors"; tenantId: string }
   | { screen: "call-test" };
 
 const AUTH_KEY = "vapilu-dummy-auth";
@@ -49,11 +51,18 @@ export default function App() {
   const goDashboard = () => setView({ screen: "dashboard" });
   const goFlows = (tenantId: string) => setView({ screen: "flows", tenantId });
   const goSettings = (tenantId: string) => setView({ screen: "settings", tenantId });
+  const goConnectors = (tenantId: string) => setView({ screen: "connectors", tenantId });
   const goCallTest = () => setView({ screen: "call-test" });
 
   const activeTenantId = "tenantId" in view ? view.tenantId : null;
   const activeSection: TenantSection | null =
-    view.screen === "flows" || view.screen === "editor" ? "flows" : view.screen === "settings" ? "settings" : null;
+    view.screen === "flows" || view.screen === "editor"
+      ? "flows"
+      : view.screen === "settings"
+        ? "settings"
+        : view.screen === "connectors"
+          ? "connectors"
+          : null;
 
   let crumbs: Crumb[] = [];
   if (view.screen === "dashboard") {
@@ -68,6 +77,8 @@ export default function App() {
     ];
   } else if (view.screen === "settings") {
     crumbs = [{ label: view.tenantId, onClick: () => goFlows(view.tenantId) }, { label: "Settings" }];
+  } else if (view.screen === "connectors") {
+    crumbs = [{ label: view.tenantId, onClick: () => goFlows(view.tenantId) }, { label: "Connectors" }];
   } else if (view.screen === "call-test") {
     crumbs = [{ label: "Call Test" }];
   }
@@ -80,7 +91,9 @@ export default function App() {
         dashboardActive={view.screen === "dashboard"}
         callTestActive={view.screen === "call-test"}
         onSelectDashboard={goDashboard}
-        onSelectSection={(tenantId, section) => (section === "flows" ? goFlows(tenantId) : goSettings(tenantId))}
+        onSelectSection={(tenantId, section) =>
+          section === "flows" ? goFlows(tenantId) : section === "settings" ? goSettings(tenantId) : goConnectors(tenantId)
+        }
         onSelectCallTest={goCallTest}
         onLogout={logout}
       />
@@ -105,6 +118,8 @@ export default function App() {
           {view.screen === "editor" && <FlowEditor flowId={view.flowId} />}
 
           {view.screen === "settings" && <TenantSettings tenantId={view.tenantId} />}
+
+          {view.screen === "connectors" && <TenantConnectors tenantId={view.tenantId} />}
 
           {view.screen === "call-test" && <CallTest />}
         </div>

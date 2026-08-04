@@ -87,7 +87,40 @@ STT_BARGE_IN_ENABLED = os.environ.get("STT_BARGE_IN", "false").lower() == "true"
 TENANT_SERVICE_URL = os.environ.get("TENANT_SERVICE_URL", "http://localhost:8004")
 TENANT_SERVICE_TOKEN = os.environ.get("TENANT_SERVICE_TOKEN", "")
 
+CONNECTOR_GATEWAY_URL = os.environ.get("CONNECTOR_GATEWAY_URL", "http://localhost:8005")
+CONNECTOR_GATEWAY_TOKEN = os.environ.get("CONNECTOR_GATEWAY_TOKEN", "")
+
 DEFAULT_GREETING = "Hello! How can I help you today?"
+
+
+async def call_connector(connector: str, operation: str, values: dict) -> tuple[bool, dict]:
+    """
+    Runs one action node's connector call against the Connector Gateway.
+    Returns (ok, result) - result is either the connector's real result or
+    a small {"error": ...} dict. A Gateway that's unreachable or errors
+    degrades to ok=False rather than raising, same "downstream failures
+    degrade the call rather than end it" convention as the NLU/TTS calls -
+    a booking failure should route the flow's on_error path, not crash
+    the whole call the caller is still on.
+    """
+    try:
+        response = await http_client.post(
+            f"{CONNECTOR_GATEWAY_URL}/call",
+            json={
+                "connector": connector,
+                "operation": operation,
+                "values": values,
+                "token": CONNECTOR_GATEWAY_TOKEN,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("ok"):
+            return True, data.get("result") or {}
+        return False, {"error": data.get("error", "connector reported failure")}
+    except Exception as e:
+        logger.exception("Connector Gateway call failed for %s.%s: %s", connector, operation, e)
+        return False, {"error": "connector gateway unreachable"}
 
 
 async def load_tenant(tenant_id: str | None) -> dict | None:
@@ -527,11 +560,19 @@ async def handle_call(
                     # The caller is answering a yes/no confirmation. Decide
                     # from their words rather than asking the model again -
                     # this is cheap and avoids an extra round trip.
+                    #
+                    # Correction words are checked FIRST, deliberately. A
+                    # false confirm() is worse than a false "ask again" - it
+                    # locks in a wrong detail rather than just repeating the
+                    # question - and a real caller sentence like "yeah,
+                    # actually change the number" contains both a yes-word
+                    # and a correction-word. Whichever list is checked first
+                    # wins ties like that, so bias toward the safer outcome.
                     lowered = transcript.lower()
-                    if any(w in lowered for w in ("yes", "yeah", "correct", "right", "confirm", "that's it")):
-                        run.confirm(True)
-                    elif any(w in lowered for w in ("no", "wrong", "not", "change", "actually")):
+                    if any(w in lowered for w in ("no", "wrong", "not", "change", "actually")):
                         run.confirm(False)
+                    elif any(w in lowered for w in ("yes", "yeah", "correct", "right", "confirm", "that's it")):
+                        run.confirm(True)
 
                 if run and run.status not in (RunStatus.DONE, RunStatus.HANDOFF):
                     flow_instructions = run.instructions()
@@ -666,19 +707,25 @@ async def handle_call(
 
                     if run.status == RunStatus.ACTING and run.pending_action:
                         action = run.pending_action
-                        # Connector Gateway doesn't exist yet. This is the
-                        # seam: log what WOULD be called, tell the client,
-                        # and continue the graph as if it succeeded.
-                        logger.info("[%s] ACTION %s.%s values=%s", conn_id,
-                                    action["connector"], action["operation"], action["values"])
+                        # _tenant_id/_flow_id are scoping context for the
+                        # connector (e.g. so two tenants' bookings for
+                        # "Tuesday" never collide) - added here, not stored
+                        # in run.values, so they can never leak into a
+                        # spoken {field} placeholder in a say/confirm node.
+                        call_values = {**action["values"], "_tenant_id": tenant_id, "_flow_id": run.flow_id}
+                        ok, result = await call_connector(action["connector"], action["operation"], call_values)
+                        logger.info("[%s] ACTION %s.%s ok=%s result=%s", conn_id,
+                                    action["connector"], action["operation"], ok, result)
                         await client_ws.send_text(json.dumps({
                             "event": "flow_action",
                             "flow_id": run.flow_id,
                             "connector": action["connector"],
                             "operation": action["operation"],
                             "values": action["values"],
+                            "ok": ok,
+                            "result": result,
                         }))
-                        run.action_completed({"status": "stubbed"}, ok=True)
+                        run.action_completed(result, ok=ok)
                         continue
 
                     if run.status == RunStatus.HANDOFF:

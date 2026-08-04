@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Building2, LayoutDashboard, ListTree, LogOut, PhoneCall, Settings as SettingsIcon } from "lucide-react";
+import { Building2, LayoutDashboard, ListTree, LogOut, PhoneCall, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api, ApiError } from "./api";
 import ThemeToggle from "./ThemeToggle";
 
-export type TenantSection = "flows" | "settings";
+export type TenantSection = "flows" | "settings" | "connectors";
 
 interface Props {
   activeTenantId: string | null;
@@ -90,6 +90,14 @@ export default function Sidebar({
                   >
                     <SettingsIcon size={13} />
                     Settings
+                  </button>
+                  <button
+                    type="button"
+                    className={`sidebar-subitem${activeSection === "connectors" ? " sidebar-subitem-active" : ""}`}
+                    onClick={() => onSelectSection(id, "connectors")}
+                  >
+                    <Plug size={13} />
+                    Connectors
                   </button>
                 </div>
               )}

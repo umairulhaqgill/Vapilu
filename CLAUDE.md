@@ -7,19 +7,25 @@ businesses; everything business-specific is configuration, not code.
 
 ## Architecture
 
-Five services, each its own folder with its own venv and `.env`.
+Six backend services, each its own folder with its own venv and `.env`,
+plus one frontend (`FlowBuilder/`, a Vite dev server, no venv/`.env` in
+the same sense - see its own README).
 
 | Service | Folder | Port | Role |
 |---|---|---|---|
 | STT | `STT/` | 8000 | Speech to text (Deepgram) |
 | Orchestrator | `Orchestrator/` | 8001 | Conversation state machine, flow execution |
-| NLU | `NLU/` | 8002 | LLM replies + field extraction (Claude via OpenRouter) |
+| NLU | `NLU/` | 8002 | LLM replies + field extraction (Claude via OpenRouter, or a local Ollama fallback) |
 | TTS | `TTS/` | 8003 | Text to speech (Piper, local) |
 | Tenant Config | `TenantConfig/` | 8004 | Per-business settings and flow definitions (MySQL) |
+| Connector Gateway | `ConnectorGateway/` | 8005 | Generic plugin registry action nodes call into (booking, calendar, CRM, ...) |
+| Flow Builder | `FlowBuilder/` | 5173 | Admin UI: tenant settings, visual flow editor, browser call tester |
 
-Start everything with `.\run_all.ps1` from the project root. It frees ports
-8000-8004, launches each service in its own window via `start_*.ps1`, waits
-for each to accept connections, then runs the mic test client.
+Start everything with `.\run_all.ps1` from the project root (mic-based
+testing) or `.\run_all_browser.ps1` (browser-based testing via Flow
+Builder's Call Test tab - no physical mic needed). Both free ports
+8000-8005 (+ 5173 for the browser variant), launch each service in its
+own window via `start_*.ps1`, and wait for each to accept connections.
 
 ### Call path
 
@@ -126,16 +132,39 @@ Leaving `TENANT_DB_URL` unset falls back to JSON files.
 
 **Working:** full voice loop (mic -> transcript -> LLM -> speech), barge-in
 with resume, conversation memory within a call, per-tenant greeting and
-system prompt, graph flows with branching and validation.
+system prompt, graph flows with branching and validation. A visual flow
+builder / admin UI (`FlowBuilder/`) covers tenant settings, flow editing,
+and a browser-based call tester. Action nodes call a real Connector
+Gateway (`ConnectorGateway/`, port 8005) - `drive_flow` in
+`orchestrator_service.py` used to fake success; now it makes a real HTTP
+call and the flow's `on_error` path fires on a real failure, not just a
+theoretical one.
 
-**Stubbed:** `drive_flow` in `orchestrator_service.py` logs what a connector
-*would* be called with and emits a `flow_action` event, then continues the
-graph as if it succeeded. Collection, validation, and confirmation are all
-real; only the outbound API call is missing.
+**Real but mock-backed:** the only connector registered so far
+(`connectors/mock_booking.py`, `CONNECTOR_ID = "booking"`) is a real
+in-memory implementation - genuine conflict-checking, tenant-scoped, a
+day really does fill up - but there's no actual calendar behind it yet.
+The Gateway is a generic plugin registry (see `ConnectorGateway/README.md`)
+specifically so a real connector (Google Calendar, Cal.com, a CRM) is a
+new file plus one registry line, not a rewrite - nothing in the
+Orchestrator or flow engine needs to change when one lands.
 
-**Not built:** Connector Gateway, flow builder UI, Channel Gateway
-(telephony), Session Store (Redis), Outbound Scheduler, Escalation service,
-Analytics, Admin API.
+Each connector can have per-tenant settings (an API key, a calendar ID),
+stored in the Gateway's own DB-or-JSON-file store
+(`connector_config_store.py`, same dual-backend shape as
+`tenant_store.py`) rather than in Tenant Config - see
+`ConnectorGateway/README.md`'s "Per-tenant connector settings" section.
+`/call` merges a tenant's config into `values["_config"]` before invoking
+a connector, so a connector reads its own settings without any
+Orchestrator involvement. Manageable per tenant via the Flow Builder's
+Connectors tab, or directly through
+`/connectors/{id}/tenants/{id}/config`.
+
+**Not built:** Channel Gateway (telephony), Session Store (Redis),
+Outbound Scheduler, Escalation service, Analytics, Admin API auth (the
+Flow Builder is still gated by the same single shared token as everything
+else - see "Known gaps" below - plus a dummy client-side login screen
+that doesn't check credentials against anything real).
 
 ## Known gaps that matter
 

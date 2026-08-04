@@ -1,7 +1,22 @@
 {
   "permissions": {
     "allow": [
-      "Bash(SHOT_DIR='C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad' node drive_drawer.mjs)"
+      "Bash(SHOT_DIR='C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad' node drive_drawer.mjs)",
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('orchestrator_service.py'\\).read\\(\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"Orchestrator health: %{http_code}\\\\n\" --max-time 5 \"http://127.0.0.1:8001/health\")",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(venv/Scripts/python.exe -m pip install -r requirements.txt)",
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('connector_gateway_service.py'\\).read\\(\\)\\); ast.parse\\(open\\('connectors/base.py'\\).read\\(\\)\\); ast.parse\\(open\\('connectors/mock_booking.py'\\).read\\(\\)\\); ast.parse\\(open\\('connectors/registry.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('orchestrator_service.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(timeout 20 bash -c 'until curl -sf http://127.0.0.1:8001/health >/dev/null; do sleep 1; done')",
+      "Bash(venv/Scripts/python.exe 'C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad/test_call_connector.py')",
+      "Bash(grep -n \"| Service | Folder\\\\|TenantConfig \\\\`|\" \"d:\\\\Projects\\\\Vapilu\\\\CLAUDE.md\")",
+      "Bash(SHOT_DIR='C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad' node drive_call.mjs)",
+      "Bash(SHOT_DIR='C:\\\\Users\\\\Umair\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Projects-Vapilu\\\\ea2d0eac-9cba-4ad3-9310-013623864764\\\\scratchpad' node drive_final_check.mjs)",
+      "Bash(timeout 20 bash -c 'until curl -sf http://127.0.0.1:8005/health >/dev/null; do sleep 1; done')",
+      "Bash(curl -s \"http://127.0.0.1:8005/health\")",
+      "Bash(curl -s http://127.0.0.1:8005/connectors/booking/tenants/bike-shop/config?token=choose_a_different_random_secret_string_hereconnector)",
+      "Bash(curl -s -X PUT http://127.0.0.1:8005/connectors/booking/tenants/bike-shop/config -H 'Content-Type: application/json' -d '{\"config\":{\"max_per_slot\":1},\"token\":\"choose_a_different_random_secret_string_hereconnector\"}')"
     ]
   }
 }

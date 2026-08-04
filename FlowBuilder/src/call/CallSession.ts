@@ -137,7 +137,8 @@ export class CallSession {
         break;
       case "flow_action": {
         const values = JSON.stringify(data.values);
-        this.log("system", `[action] ${data.flow_id}: ${data.connector}.${data.operation}(${values})`);
+        const outcome = data.ok === false ? ` -> FAILED: ${(data.result as { error?: string } | undefined)?.error ?? "unknown error"}` : "";
+        this.log("system", `[action] ${data.flow_id}: ${data.connector}.${data.operation}(${values})${outcome}`);
         break;
       }
       case "handoff": {
